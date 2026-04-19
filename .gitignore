@@ -9,5 +9,12 @@ ui/.swiftpm/
 ui/*.xcodeproj/xcuserdata/
 Teleport/.gitignore
 # Build outputs
-build/  
+build/
+
+# Generated icon assets (rebuilt by Scripts/build_icon.sh)
+ui/Resources/AppIcon.icns
+ui/Resources/AppIcon.png
+
+# Built app bundle
+ui/Teleport.app/
 
