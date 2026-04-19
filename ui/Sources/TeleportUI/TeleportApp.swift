@@ -221,8 +221,18 @@ struct MenuContent: View {
     
     var body: some View {
         Button("Open Dashboard") {
-            openWindow(id: "dashboard")
+            // Force macOS to treat this as a standard app that can open windows
+            NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
+            
+            openWindow(id: "dashboard")
+            
+            // Fallback: bring any existing windows to the front
+            for window in NSApp.windows {
+                if window.className != "NSStatusBarWindow" {
+                    window.makeKeyAndOrderFront(nil)
+                }
+            }
         }
         
         Divider()
