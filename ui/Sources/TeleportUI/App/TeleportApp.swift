@@ -3,21 +3,12 @@ import SwiftUI
 @main
 struct TeleportApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var daemon = DaemonController()
+    @StateObject private var daemon = DaemonController.shared
 
     var body: some Scene {
-        WindowGroup(id: AppDelegate.dashboardWindowID) {
-            RootView()
-                .environmentObject(daemon)
-                .frame(minWidth: 920, minHeight: 580)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentMinSize)
-        .defaultSize(width: 1080, height: 660)
-        .commands {
-            CommandGroup(replacing: .newItem) { }
-        }
-
+        // The dashboard window is created and managed by AppDelegate
+        // using NSHostingController + NSWindow (see AppDelegate.swift).
+        // SwiftUI only owns the MenuBarExtra here.
         MenuBarExtra {
             MenuBarContent()
                 .environmentObject(daemon)

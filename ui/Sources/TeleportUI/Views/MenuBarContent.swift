@@ -3,7 +3,6 @@ import AppKit
 
 /// Compact menu rendered when the user clicks the bolt in the menu bar.
 struct MenuBarContent: View {
-    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject var daemon: DaemonController
 
     var body: some View {
@@ -15,7 +14,7 @@ struct MenuBarContent: View {
                 title: "Open Dashboard",
                 systemImage: "rectangle.grid.2x2.fill"
             ) {
-                (NSApp.delegate as? AppDelegate)?.showDashboard(using: openWindow)
+                AppDelegate.shared.showDashboard()
             }
 
             if daemon.isRunning {

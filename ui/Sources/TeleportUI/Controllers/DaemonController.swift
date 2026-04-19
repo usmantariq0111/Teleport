@@ -30,6 +30,10 @@ enum DaemonMode: String, Codable {
 @MainActor
 final class DaemonController: ObservableObject {
 
+    /// Single shared instance referenced by AppDelegate, the menu-bar
+    /// SwiftUI scene, and the dashboard window's hosted views.
+    static let shared = DaemonController()
+
     // MARK: - Published state
 
     @Published private(set) var isRunning: Bool = false
