@@ -1,20 +1,38 @@
-.PHONY: build-daemon run-daemon build-ui run-ui
+.PHONY: build-daemon run-daemon build-ui run-ui icon app app-release run clean
 
-# Daemon commands (requires cargo)
+# ---------- Daemon ----------
 build-daemon:
 	cd daemon && cargo build
+
+build-daemon-release:
+	cd daemon && cargo build --release
 
 run-daemon:
 	cd daemon && cargo run
 
-# UI commands (requires swift/xcodebuild)
+# ---------- UI ----------
 build-ui:
 	cd ui && swift build
 
 run-ui:
 	cd ui && swift run
 
-# Helper to run both (simplified)
-run:
-	@echo "Starting Teleport POC..."
-	@make -j 2 run-daemon run-ui
+# ---------- Icon + .app bundle ----------
+icon:
+	./ui/Scripts/build_icon.sh
+
+app:
+	./ui/Scripts/build_app.sh
+
+app-release:
+	./ui/Scripts/build_app.sh --release
+
+# ---------- Convenience ----------
+# Build & launch the bundled .app (debug). This is the recommended way
+# to run Teleport — the menu-bar icon will appear in the top-right.
+run: app
+	open ui/Teleport.app
+
+clean:
+	rm -rf ui/.build ui/Teleport.app ui/Resources/AppIcon.icns ui/Resources/AppIcon.png
+	cd daemon && cargo clean
