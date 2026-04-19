@@ -4,6 +4,8 @@ use clap::{Parser, Subcommand};
 use dashmap::DashMap;
 use ignore::gitignore::GitignoreBuilder;
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -53,9 +55,9 @@ async fn main() -> notify::Result<()> {
     // The channel now passes the complex SyncMessage structure
     let (tx, rx) = mpsc::channel::<network::SyncMessage>(100);
 
-    // The Ignore Cache prevents infinite echo loops
-    let ignore_cache = Arc::new(DashMap::<String, bool>::new());
-    let watcher_cache = ignore_cache.clone();
+    // The Hash Cache prevents infinite echo loops
+    let file_hashes = Arc::new(DashMap::<String, u64>::new());
+    let watcher_hashes = file_hashes.clone();
 
     let tx_clone = tx.clone();
     let root_path = path.clone();
@@ -69,13 +71,25 @@ async fn main() -> notify::Result<()> {
                         if !gitignore.matched(&file_path, false).is_ignore() {
                             let path_str = file_path.to_string_lossy().into_owned();
                             
-                            // Prevent echo loop: Is this file from the network?
-                            if watcher_cache.remove(&path_str).is_some() {
-                                continue;
-                            }
-                            
                             // Genuine local change. Read it from disk.
                             if let Ok(content) = std::fs::read(&file_path) {
+                                
+                                // Compute hash of the current content
+                                let mut hasher = DefaultHasher::new();
+                                content.hash(&mut hasher);
+                                let current_hash = hasher.finish();
+                                
+                                // Check if this hash matches what we just wrote from the network
+                                if let Some(cached_hash) = watcher_hashes.get(&path_str) {
+                                    if *cached_hash == current_hash {
+                                        // This is an echo! The file content hasn't changed.
+                                        continue;
+                                    }
+                                }
+                                
+                                // The content is genuinely new. Update our cache and send it.
+                                watcher_hashes.insert(path_str, current_hash);
+                                
                                 // Convert to relative path for the remote peer
                                 if let Ok(rel_path) = file_path.strip_prefix(&root_path) {
                                     let rel_path_str = rel_path.to_string_lossy().into_owned();
@@ -100,10 +114,10 @@ async fn main() -> notify::Result<()> {
 
     match &cli.command {
         Commands::Host => {
-            network::start_host(rx, ignore_cache).await;
+            network::start_host(rx, file_hashes).await;
         }
         Commands::Join { ip } => {
-            network::start_client(ip, rx, ignore_cache).await;
+            network::start_client(ip, rx, file_hashes).await;
         }
     }
 

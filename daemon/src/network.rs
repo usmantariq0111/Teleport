@@ -1,5 +1,7 @@
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -11,24 +13,24 @@ pub struct SyncMessage {
     pub content: Vec<u8>,
 }
 
-pub async fn start_host(rx: mpsc::Receiver<SyncMessage>, ignore_cache: Arc<DashMap<String, bool>>) {
+pub async fn start_host(rx: mpsc::Receiver<SyncMessage>, file_hashes: Arc<DashMap<String, u64>>) {
     println!("📡 Host mode: Listening on 0.0.0.0:8080...");
     let listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
 
     if let Ok((socket, addr)) = listener.accept().await {
         println!("✅ Client connected from: {:?}", addr);
-        handle_connection(socket, rx, ignore_cache).await;
+        handle_connection(socket, rx, file_hashes).await;
     }
 }
 
-pub async fn start_client(ip: &str, rx: mpsc::Receiver<SyncMessage>, ignore_cache: Arc<DashMap<String, bool>>) {
+pub async fn start_client(ip: &str, rx: mpsc::Receiver<SyncMessage>, file_hashes: Arc<DashMap<String, u64>>) {
     let addr = format!("{}:8080", ip);
     println!("📡 Join mode: Connecting to {}...", addr);
 
     match TcpStream::connect(&addr).await {
         Ok(socket) => {
             println!("✅ Successfully connected to host!");
-            handle_connection(socket, rx, ignore_cache).await;
+            handle_connection(socket, rx, file_hashes).await;
         }
         Err(e) => {
             eprintln!("❌ Failed to connect: {}", e);
@@ -36,7 +38,7 @@ pub async fn start_client(ip: &str, rx: mpsc::Receiver<SyncMessage>, ignore_cach
     }
 }
 
-async fn handle_connection(socket: TcpStream, mut rx: mpsc::Receiver<SyncMessage>, ignore_cache: Arc<DashMap<String, bool>>) {
+async fn handle_connection(socket: TcpStream, mut rx: mpsc::Receiver<SyncMessage>, file_hashes: Arc<DashMap<String, u64>>) {
     let (mut read_half, mut write_half) = socket.into_split();
 
     // Spawn a task to READ from the network and write to local disk
@@ -64,10 +66,15 @@ async fn handle_connection(socket: TcpStream, mut rx: mpsc::Receiver<SyncMessage
                         let abs_path = root_path.join(&msg.path);
                         let abs_path_str = abs_path.to_string_lossy().into_owned();
                         
-                        // 4. Add to Ignore Cache (absolute path) to prevent echo loop
-                        ignore_cache.insert(abs_path_str, true);
+                        // 4. Compute hash of the received content
+                        let mut hasher = DefaultHasher::new();
+                        msg.content.hash(&mut hasher);
+                        let hash = hasher.finish();
+                        
+                        // 5. Add to Hash Cache to prevent echo loop
+                        file_hashes.insert(abs_path_str, hash);
 
-                        // 5. Write to local disk natively
+                        // 6. Write to local disk natively
                         if let Some(parent) = abs_path.parent() {
                             let _ = tokio::fs::create_dir_all(parent).await;
                         }
