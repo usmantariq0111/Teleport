@@ -12,7 +12,15 @@ class DaemonController: ObservableObject {
         guard !isRunning else { return }
         
         // Find the absolute path to our compiled Rust binary
-        let daemonPath = NSHomeDirectory() + "/Desktop/Project/Teleport/daemon/target/debug/teleport-daemon"
+        var daemonPath = ""
+        
+        // Check if we are running inside a bundled .app (Production)
+        if let bundlePath = Bundle.main.url(forResource: "teleport-daemon", withExtension: nil)?.path {
+            daemonPath = bundlePath
+        } else {
+            // Fallback to local dev path
+            daemonPath = NSHomeDirectory() + "/Desktop/Project/Teleport/daemon/target/debug/teleport-daemon"
+        }
         
         if !FileManager.default.fileExists(atPath: daemonPath) {
             self.lastLog = "Error: Rust binary not found at \(daemonPath)"
