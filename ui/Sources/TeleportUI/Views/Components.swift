@@ -227,6 +227,112 @@ struct PassphraseCard: View {
     }
 }
 
+/// Lists every IPv4 address the host can be reached on. Designed to sit
+/// beside the passphrase card so the user can copy "IP + passphrase" in
+/// two clicks and hand both to the joiner — no Terminal required.
+struct HostAddressCard: View {
+    @ObservedObject var addressBook: LocalAddressBook
+    let port: Int
+
+    @State private var copied: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "wifi")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.accent)
+                Text("YOUR ADDRESS")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .tracking(0.7)
+                    .foregroundStyle(Theme.Palette.textMuted)
+                Spacer()
+                Button {
+                    addressBook.refresh()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh interfaces")
+            }
+
+            if addressBook.addresses.isEmpty {
+                Text("No active network interface — connect to Wi-Fi or Ethernet.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Palette.textMuted)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(addressBook.addresses) { addr in
+                        addressRow(addr)
+                    }
+                }
+            }
+
+            Text("Share **one** of these with the joining peer along with the passphrase.")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.Palette.textMuted)
+                .padding(.top, 2)
+        }
+        .card(padding: Theme.Spacing.md)
+    }
+
+    private func addressRow(_ addr: LocalAddressBook.Address) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: iconName(for: addr.label))
+                .foregroundStyle(Theme.Palette.accent)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(addr.label)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Text(addr.interface)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Theme.Palette.textMuted)
+                }
+                Text("\(addr.ip):\(port)")
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            Button {
+                copy(addr.ip)
+            } label: {
+                Image(systemName: copied == addr.ip ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(copied == addr.ip ? Theme.Palette.success : Theme.Palette.accent)
+            }
+            .buttonStyle(.borderless)
+            .help("Copy IP")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Theme.Palette.surfaceAlt.opacity(0.5))
+        )
+    }
+
+    private func iconName(for label: String) -> String {
+        switch label {
+        case "Wi-Fi":    return "wifi"
+        case "Ethernet": return "cable.connector"
+        case "VPN":      return "lock.shield"
+        default:         return "network"
+        }
+    }
+
+    private func copy(_ value: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(value, forType: .string)
+        copied = value
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            if copied == value { copied = nil }
+        }
+    }
+}
+
 /// Small label/value row used in side panels.
 struct InfoRow: View {
     let label: String

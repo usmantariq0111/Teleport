@@ -4,6 +4,7 @@ struct DashboardView: View {
     @EnvironmentObject var daemon: DaemonController
     @StateObject private var folder = WatchFolderManager.shared
     @StateObject private var bonjour = BonjourBrowser.shared
+    @StateObject private var addressBook = LocalAddressBook.shared
     @State private var ipDraft: String = ""
     @State private var now: Date = Date()
     @State private var modeDraft: DaemonMode = .host
@@ -27,6 +28,9 @@ struct DashboardView: View {
                     }
                     if daemon.isRunning, let pp = daemon.activePassphrase {
                         PassphraseCard(passphrase: pp, mode: daemon.mode)
+                        if daemon.mode == .host {
+                            HostAddressCard(addressBook: addressBook, port: daemon.port)
+                        }
                     }
                     statsGrid
                     HStack(alignment: .top, spacing: Theme.Spacing.md) {

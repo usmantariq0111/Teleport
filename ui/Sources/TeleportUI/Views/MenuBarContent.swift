@@ -5,6 +5,7 @@ import AppKit
 struct MenuBarContent: View {
     @EnvironmentObject var daemon: DaemonController
     @StateObject private var folder = WatchFolderManager.shared
+    @StateObject private var addressBook = LocalAddressBook.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -30,12 +31,41 @@ struct MenuBarContent: View {
                 }
             }
 
-            // When hosting, surface the passphrase here too so the user
-            // doesn't have to open the dashboard just to copy it.
+            // When hosting, surface the IP + passphrase here too so
+            // the user doesn't have to open the dashboard just to copy
+            // them. Both are required to onboard a joiner.
             if daemon.isRunning,
                daemon.mode == .host,
                let pp = daemon.activePassphrase {
                 Divider()
+                if let primary = addressBook.primary {
+                    Button {
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(primary.ip, forType: .string)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "wifi")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Theme.Palette.accent)
+                                .frame(width: 16)
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text("\(primary.label) IP (click to copy)")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Theme.Palette.textMuted)
+                                Text("\(primary.ip):\(daemon.port)")
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
                 Button {
                     let pb = NSPasteboard.general
                     pb.clearContents()
