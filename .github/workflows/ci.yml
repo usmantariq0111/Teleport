@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Select latest Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -41,7 +41,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry & target
-        uses: actions/cache@v4
+        uses: actions/cache@v4   # v5 not yet released for cache; v4 fine for now
         with:
           path: |
             ~/.cargo/registry
@@ -82,7 +82,7 @@ jobs:
           ditto -c -k --keepParent Teleport.app Teleport-app-debug-build.zip
 
       - name: Upload .app artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4   # v5 not yet released; v4 fine
         with:
           name: Teleport-app-${{ github.sha }}
           path: ui/Teleport-app-debug-build.zip
