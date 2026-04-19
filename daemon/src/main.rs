@@ -1,10 +1,12 @@
 mod network;
 
 use clap::{Parser, Subcommand};
+use dashmap::DashMap;
+use ignore::gitignore::GitignoreBuilder;
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
+use std::sync::Arc;
 use tokio::sync::mpsc;
-use ignore::gitignore::GitignoreBuilder;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -31,11 +33,9 @@ async fn main() -> notify::Result<()> {
     println!("Teleport Daemon starting...");
     let path = std::env::current_dir().unwrap();
 
-    // Parse the .gitignore file if it exists
     let gitignore_path = path.join(".gitignore");
     let mut builder = GitignoreBuilder::new(&path);
     
-    // Always ignore critical directories to prevent infinite loops
     builder.add_line(None, ".git").unwrap();
     builder.add_line(None, "target").unwrap();
     builder.add_line(None, ".build").unwrap();
@@ -48,23 +48,46 @@ async fn main() -> notify::Result<()> {
         }
     }
     
-    // Build the gitignore object
     let gitignore = builder.build().unwrap().clone();
 
-    // Create an async channel to pass file events to the network layer
-    let (tx, rx) = mpsc::channel::<String>(100);
+    // The channel now passes the complex SyncMessage structure
+    let (tx, rx) = mpsc::channel::<network::SyncMessage>(100);
 
-    // Set up the FSEvents watcher
+    // The Ignore Cache prevents infinite echo loops
+    let ignore_cache = Arc::new(DashMap::<String, bool>::new());
+    let watcher_cache = ignore_cache.clone();
+
     let tx_clone = tx.clone();
+    let root_path = path.clone();
+    
     let mut watcher = RecommendedWatcher::new(
         move |res: notify::Result<Event>| {
             if let Ok(event) = res {
                 if event.kind.is_modify() || event.kind.is_create() {
                     for file_path in event.paths {
-                        // Dynamically check against the .gitignore rules
+                        // Check .gitignore
                         if !gitignore.matched(&file_path, false).is_ignore() {
-                            let path_str = file_path.to_string_lossy();
-                            let _ = tx_clone.blocking_send(path_str.into_owned());
+                            let path_str = file_path.to_string_lossy().into_owned();
+                            
+                            // Prevent echo loop: Is this file from the network?
+                            if watcher_cache.remove(&path_str).is_some() {
+                                continue;
+                            }
+                            
+                            // Genuine local change. Read it from disk.
+                            if let Ok(content) = std::fs::read(&file_path) {
+                                // Convert to relative path for the remote peer
+                                if let Ok(rel_path) = file_path.strip_prefix(&root_path) {
+                                    let rel_path_str = rel_path.to_string_lossy().into_owned();
+                                    
+                                    // Send over network channel
+                                    let msg = network::SyncMessage {
+                                        path: rel_path_str,
+                                        content,
+                                    };
+                                    let _ = tx_clone.blocking_send(msg);
+                                }
+                            }
                         }
                     }
                 }
@@ -77,10 +100,10 @@ async fn main() -> notify::Result<()> {
 
     match &cli.command {
         Commands::Host => {
-            network::start_host(rx).await;
+            network::start_host(rx, ignore_cache).await;
         }
         Commands::Join { ip } => {
-            network::start_client(ip, rx).await;
+            network::start_client(ip, rx, ignore_cache).await;
         }
     }
 
