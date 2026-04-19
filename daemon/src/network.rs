@@ -82,7 +82,6 @@ async fn handle_connection(socket: TcpStream, mut rx: mpsc::Receiver<SyncMessage
                             let patch_str = String::from_utf8_lossy(&msg.content);
                             let local_content = tokio::fs::read_to_string(&abs_path).await.unwrap_or_default();
                             
-                            use std::str::FromStr;
                             if let Ok(patch) = diffy::Patch::from_str(&patch_str) {
                                 if let Ok(new_content) = diffy::apply(&local_content, &patch) {
                                     final_content = new_content.into_bytes();
