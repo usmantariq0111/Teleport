@@ -71,7 +71,17 @@ async fn main() -> notify::Result<()> {
                         if !gitignore.matched(&file_path, false).is_ignore() {
                             let path_str = file_path.to_string_lossy().into_owned();
                             
-                            // Genuine local change. Read it from disk.
+                            // Genuine local change. 
+                            
+                            // PERFORMANCE PATCH: Ignore files larger than 50 MB
+                            if let Ok(metadata) = std::fs::metadata(&file_path) {
+                                if metadata.len() > 50_000_000 {
+                                    println!("⚠️ Ignoring massive file: {} ({} bytes)", file_path.display(), metadata.len());
+                                    continue;
+                                }
+                            }
+                            
+                            // Read it from disk.
                             if let Ok(content) = std::fs::read(&file_path) {
                                 
                                 // Compute hash of the current content

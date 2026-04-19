@@ -7,6 +7,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
+const MAX_PAYLOAD_SIZE: usize = 50_000_000; // 50 MB
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SyncMessage {
     pub path: String,
@@ -51,6 +53,13 @@ async fn handle_connection(socket: TcpStream, mut rx: mpsc::Receiver<SyncMessage
             match read_half.read_exact(&mut length_buf).await {
                 Ok(_) => {
                     let msg_len = u32::from_be_bytes(length_buf) as usize;
+                    
+                    // SECURITY PATCH 1: Out Of Memory (OOM) Attack Prevention
+                    if msg_len > MAX_PAYLOAD_SIZE {
+                        eprintln!("🚨 SECURITY ALERT: Peer attempted to send a payload of {} bytes (> 50MB limit). Disconnecting.", msg_len);
+                        break;
+                    }
+                    
                     let mut msg_buf = vec![0u8; msg_len];
 
                     // 2. Read the actual JSON payload
@@ -61,6 +70,13 @@ async fn handle_connection(socket: TcpStream, mut rx: mpsc::Receiver<SyncMessage
 
                     // 3. Parse JSON
                     if let Ok(msg) = serde_json::from_slice::<SyncMessage>(&msg_buf) {
+                        
+                        // SECURITY PATCH 2: Path Traversal Prevention
+                        if msg.path.contains("..") || msg.path.starts_with('/') || msg.path.starts_with('\\') {
+                            eprintln!("🚨 SECURITY ALERT: Peer attempted Path Traversal with path '{}'. Dropping payload.", msg.path);
+                            continue;
+                        }
+                        
                         println!("🌐 Received remote file: {}", msg.path);
                         
                         let abs_path = root_path.join(&msg.path);
