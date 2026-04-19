@@ -1,0 +1,13 @@
+# Rust / Daemon
+daemon/target/
+daemon/Cargo.lock
+
+# macOS / UI
+.DS_Store
+ui/.build/
+ui/.swiftpm/
+ui/*.xcodeproj/xcuserdata/
+Teleport/.gitignore
+# Build outputs
+build/  
+
