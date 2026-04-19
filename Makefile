@@ -1,4 +1,4 @@
-.PHONY: build-daemon run-daemon build-ui run-ui icon app app-release run clean
+.PHONY: build-daemon run-daemon build-ui run-ui icon app app-release dmg dmg-release run clean
 
 # ---------- Daemon ----------
 build-daemon:
@@ -27,6 +27,13 @@ app:
 app-release:
 	./ui/Scripts/build_app.sh --release
 
+# ---------- Distributable DMG (drag-to-/Applications) ----------
+dmg:
+	./ui/Scripts/build_dmg.sh
+
+dmg-release:
+	./ui/Scripts/build_dmg.sh --release
+
 # ---------- Convenience ----------
 # Build & launch the bundled .app (debug). This is the recommended way
 # to run Teleport — the menu-bar icon will appear in the top-right.
@@ -34,5 +41,5 @@ run: app
 	open ui/Teleport.app
 
 clean:
-	rm -rf ui/.build ui/Teleport.app ui/Resources/AppIcon.icns ui/Resources/AppIcon.png
+	rm -rf ui/.build ui/Teleport.app ui/Resources/AppIcon.icns ui/Resources/AppIcon.png dist/
 	cd daemon && cargo clean

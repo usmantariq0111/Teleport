@@ -1,0 +1,90 @@
+name: CI
+
+# Verifies that both the Rust daemon and the SwiftUI front-end compile
+# cleanly on every push and pull request. Also produces a downloadable
+# .app artifact so reviewers can grab a build off the PR / commit page.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (macOS 14, Xcode 15)
+    # macos-14 = Sonoma + Apple Silicon. Required because Package.swift
+    # targets .macOS(.v14). macos-latest moves over time — pin it.
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select latest Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Print toolchain versions
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            daemon/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('daemon/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Cache Swift build
+        uses: actions/cache@v4
+        with:
+          path: ui/.build
+          key: swift-${{ runner.os }}-${{ hashFiles('ui/Package.swift', 'ui/Sources/**/*.swift') }}
+          restore-keys: swift-${{ runner.os }}-
+
+      - name: Build Rust daemon (release)
+        run: cd daemon && cargo build --release
+
+      - name: Build Swift UI (release)
+        run: cd ui && swift build -c release
+
+      - name: Bundle Teleport.app
+        run: ./ui/Scripts/build_app.sh --release
+
+      - name: Verify bundle structure
+        run: |
+          set -e
+          test -f ui/Teleport.app/Contents/Info.plist
+          test -x ui/Teleport.app/Contents/MacOS/TeleportUI
+          test -x ui/Teleport.app/Contents/MacOS/teleport-daemon
+          test -f ui/Teleport.app/Contents/Resources/AppIcon.icns
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" \
+            ui/Teleport.app/Contents/Info.plist
+
+      - name: Zip .app for artifact upload
+        run: |
+          cd ui
+          ditto -c -k --keepParent Teleport.app Teleport-app-debug-build.zip
+
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Teleport-app-${{ github.sha }}
+          path: ui/Teleport-app-debug-build.zip
+          if-no-files-found: error
+          retention-days: 14

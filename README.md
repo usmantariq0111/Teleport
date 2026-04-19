@@ -21,7 +21,27 @@ Teleport is built using a hybrid architecture designed for maximum performance a
 
 ---
 
-## 🚀 How to Run Locally
+## 📥 Download & Install (for users)
+
+The easiest way to use Teleport is to grab the latest pre-built `.dmg` from the [Releases page](../../releases/latest):
+
+1. Download **`Teleport-<version>.dmg`**.
+2. Open the DMG and drag **Teleport.app** into the **Applications** folder.
+3. Launch it from Spotlight or Launchpad.
+4. The first time you run it macOS will say *"Teleport can't be opened because Apple cannot check it for malicious software"* — that's expected because the app is unsigned. Either:
+   - **Right-click** Teleport.app in Finder → **Open** → **Open** in the dialog (this only needs to happen once), **or**
+   - run this in Terminal:
+     ```bash
+     xattr -dr com.apple.quarantine /Applications/Teleport.app
+     open /Applications/Teleport.app
+     ```
+5. Look for the ⚡ lightning-bolt icon in your menu bar (top-right). Click it → **Open Dashboard**.
+
+> **Requirements:** macOS 14 Sonoma or newer (Apple Silicon or Intel).
+
+---
+
+## 🚀 How to Build & Run Locally (for contributors)
 
 ### Prerequisites
 - macOS 14 (Sonoma) or newer
@@ -40,12 +60,17 @@ make app-release    # signed-ad-hoc release build
 
 The app launches as a true menu-bar utility (`LSUIElement`), so it does **not** show up in the Dock or App Switcher by default. When you open the dashboard from the menu, Teleport temporarily promotes itself to a regular app so the window can take focus, then quietly demotes back once you close the window — no leftover Dock icon.
 
-### 2. Or run unbundled (dev loop)
+### 2. Build a distributable DMG
+```bash
+make dmg-release    # produces dist/Teleport-<version>.dmg
+```
+
+### 3. Or run unbundled (dev loop)
 ```bash
 make run-ui         # cd ui && swift run
 ```
 
-### 2. Testing the P2P Sync (Terminal Fallback)
+### 4. Testing the P2P Sync (Terminal Fallback)
 If you want to run the daemon manually without the Swift UI, you can use the CLI commands:
 
 **Terminal A (The Host):**
@@ -64,6 +89,32 @@ Any file saved in the directory will be instantly caught by `FSEvents` and strea
 
 ---
 
+## 📦 Cutting a release (maintainers)
+
+Releases are fully automated by GitHub Actions. To publish a new version:
+
+```bash
+# bump the version in ui/Resources/Info.plist if you want it baked in,
+# then tag and push:
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The [`Release` workflow](.github/workflows/release.yml) will:
+1. Spin up a `macos-14` runner with Xcode + Rust toolchains.
+2. Stamp `Info.plist` with the tag version.
+3. Build the Rust daemon + SwiftUI app in release mode.
+4. Bundle everything into `Teleport.app` with the icon.
+5. Package it as `Teleport-<version>.dmg` (drag-to-/Applications layout).
+6. Compute the SHA-256 checksum.
+7. Create a GitHub Release with the DMG and checksum attached and auto-generated release notes.
+
+You can also trigger a release manually from the **Actions → Release → Run workflow** button.
+
+The [`CI` workflow](.github/workflows/ci.yml) runs on every push and PR — it verifies that both targets build cleanly and uploads a downloadable `.app` artifact for reviewers.
+
+---
+
 ## 🗺️ Roadmap to Production
 
 - [x] Phase 1: OS-Level `FSEvents` File Watcher (Rust)
@@ -72,7 +123,8 @@ Any file saved in the directory will be instantly caught by `FSEvents` and strea
 - [x] Phase 4: Dynamic `.gitignore` Filtering (`ignore` crate)
 - [ ] Phase 5: Integrate `automerge-rs` CRDTs for mathematical conflict resolution
 - [ ] Phase 6: Upgrade TCP to `webrtc-rs` for NAT traversal and remote internet syncing
-- [ ] Phase 7: GitHub Actions CI/CD for pre-compiled `.dmg` distribution
+- [x] Phase 7: GitHub Actions CI/CD for pre-compiled `.dmg` distribution
+- [ ] Phase 8: Code-signing + Apple notarization for one-click installs (no Gatekeeper warning)
 
 ---
 

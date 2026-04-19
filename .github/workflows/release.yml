@@ -1,0 +1,111 @@
+name: Release
+
+# Triggered when you push a version tag like `v0.2.0`. Builds a release
+# .app, packages it as Teleport-<version>.dmg (drag-to-/Applications),
+# and creates a GitHub Release with the DMG attached so end users can
+# download and install in two clicks.
+#
+# To cut a release locally:
+#   git tag v0.2.0 && git push origin v0.2.0
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to publish (e.g. v0.2.0)'
+        required: true
+
+permissions:
+  contents: write   # required by softprops/action-gh-release to create the release
+
+jobs:
+  release:
+    name: Build & publish DMG
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select latest Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building $TAG ($VERSION)"
+
+      - name: Stamp Info.plist with version
+        run: |
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleShortVersionString ${{ steps.ver.outputs.version }}" \
+            -c "Set :CFBundleVersion ${{ github.run_number }}" \
+            ui/Resources/Info.plist
+          cat ui/Resources/Info.plist
+
+      - name: Build Teleport.dmg
+        run: ./ui/Scripts/build_dmg.sh --release
+
+      - name: Compute SHA256 checksum
+        id: sha
+        run: |
+          DMG="dist/Teleport-${{ steps.ver.outputs.version }}.dmg"
+          SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "$SHA  $(basename "$DMG")" > "$DMG.sha256"
+          echo "DMG: $DMG"
+          echo "SHA: $SHA"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Teleport ${{ steps.ver.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/Teleport-${{ steps.ver.outputs.version }}.dmg
+            dist/Teleport-${{ steps.ver.outputs.version }}.dmg.sha256
+          body: |
+            ## Teleport ${{ steps.ver.outputs.tag }}
+
+            Native macOS P2P sync engine. Menu-bar app with a real-time dashboard.
+
+            ### Install
+            1. Download **Teleport-${{ steps.ver.outputs.version }}.dmg** below.
+            2. Open it and drag **Teleport.app** into the **Applications** folder.
+            3. The first time you launch it, macOS may say *"Teleport can't be opened because Apple cannot check it for malicious software."* This is expected for unsigned apps. Either:
+               - **Right-click** Teleport.app in Finder → **Open** → click **Open** in the dialog, **or**
+               - Run once from Terminal:
+                 ```bash
+                 xattr -dr com.apple.quarantine /Applications/Teleport.app
+                 open /Applications/Teleport.app
+                 ```
+            4. Look for the lightning-bolt icon in your menu bar (top-right). Click it → **Open Dashboard**.
+
+            ### Requirements
+            - macOS 14 (Sonoma) or newer
+            - Apple Silicon or Intel Mac
+
+            ### Verify download (optional)
+            ```
+            shasum -a 256 Teleport-${{ steps.ver.outputs.version }}.dmg
+            # Expected: ${{ steps.sha.outputs.sha }}
+            ```
