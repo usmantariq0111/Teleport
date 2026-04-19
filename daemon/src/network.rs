@@ -107,20 +107,38 @@ pub async fn start_host(port: u16, hub: Arc<PeerHub>, passphrase: Passphrase) {
     }
 }
 
-/// Joiner: connect once. (Auto-reconnect lives in v0.5; for v0.4 a single
-/// connect attempt with a clear error message is enough.)
+/// Joiner: keep trying to reach the host. v0.4 tried once and gave up;
+/// v0.5 retries with exponential backoff (1s, 2s, 4s, 8s, 16s, 32s, then
+/// caps at 32s). Both connect failures *and* mid-session disconnects
+/// trigger a fresh attempt — until the user stops the daemon.
 pub async fn start_client(ip: &str, port: u16, hub: Arc<PeerHub>, passphrase: Passphrase) {
     let addr = format!("{ip}:{port}");
-    println!("📡 Joining {addr}…");
-    match TcpStream::connect(&addr).await {
-        Ok(sock) => {
-            let _ = sock.set_nodelay(true);
-            let peer_addr = sock.peer_addr().ok();
-            handle_peer(sock, peer_addr.unwrap_or_else(|| ([0, 0, 0, 0], 0).into()), hub, passphrase, false).await;
+    let mut backoff = Duration::from_secs(1);
+    let max_backoff = Duration::from_secs(32);
+
+    loop {
+        println!("📡 Joining {addr}…");
+        match TcpStream::connect(&addr).await {
+            Ok(sock) => {
+                let _ = sock.set_nodelay(true);
+                let peer_addr = sock
+                    .peer_addr()
+                    .ok()
+                    .unwrap_or_else(|| ([0, 0, 0, 0], 0).into());
+                // Reset backoff on a successful connect.
+                backoff = Duration::from_secs(1);
+                handle_peer(sock, peer_addr, hub.clone(), passphrase.clone(), false).await;
+                println!("🔁 Connection lost, will retry in {}s…", backoff.as_secs());
+            }
+            Err(e) => {
+                eprintln!(
+                    "❌ Failed to connect to {addr}: {e} — retrying in {}s",
+                    backoff.as_secs()
+                );
+            }
         }
-        Err(e) => {
-            eprintln!("❌ Failed to connect to {addr}: {e}");
-        }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(max_backoff);
     }
 }
 

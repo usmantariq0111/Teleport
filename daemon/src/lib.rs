@@ -4,6 +4,7 @@
 //! lives here so it can be tested in isolation.
 
 pub mod crypto;
+pub mod discovery;
 pub mod network;
 pub mod path_safe;
 pub mod proto;

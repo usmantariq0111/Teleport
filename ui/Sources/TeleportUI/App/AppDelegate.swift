@@ -32,6 +32,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        registerSleepWakeObservers()
+    }
+
+    // MARK: - Sleep / wake
+
+    /// macOS posts these notifications on `NSWorkspace.shared.notificationCenter`,
+    /// not the default center. Easy to miss.
+    private func registerSleepWakeObservers() {
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(self,
+                       selector: #selector(systemWillSleep(_:)),
+                       name: NSWorkspace.willSleepNotification,
+                       object: nil)
+        nc.addObserver(self,
+                       selector: #selector(systemDidWake(_:)),
+                       name: NSWorkspace.didWakeNotification,
+                       object: nil)
+    }
+
+    @objc private func systemWillSleep(_ notification: Notification) {
+        // Stop the daemon so its TCP socket closes cleanly. Otherwise a
+        // hanging connection wakes up half-broken on the other side, the
+        // peer can't tell we left, and the next event quietly drops.
+        DaemonController.shared.handleSystemSleep()
+    }
+
+    @objc private func systemDidWake(_ notification: Notification) {
+        DaemonController.shared.handleSystemWake()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

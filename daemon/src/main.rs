@@ -4,7 +4,7 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::event::{ModifyKind, RenameMode};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use teleport_daemon::crypto::Passphrase;
-use teleport_daemon::network;
+use teleport_daemon::{discovery, network};
 use teleport_daemon::proto::{FileBody, FileEvent};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -142,6 +142,9 @@ async fn main() -> notify::Result<()> {
 
     match &cli.command {
         Commands::Host => {
+            // Bonjour advertisement — keep the handle alive for the
+            // lifetime of the host. Drop closes the registration cleanly.
+            let _bonjour = discovery::start_advertising(cli.port);
             network::start_host(cli.port, hub, passphrase).await;
         }
         Commands::Join { ip } => {

@@ -52,6 +52,10 @@ final class DaemonController: ObservableObject {
     /// what the user typed/pasted. Cleared on stop.
     @Published private(set) var activePassphrase: Passphrase? = nil
 
+    /// Surfaces transient banners ("Reconnecting after sleep…", etc.) at
+    /// the top of the dashboard.
+    @Published private(set) var statusBanner: String? = nil
+
     // MARK: - Config
 
     @AppStorage("teleport.peerIP")  var peerIP: String = "127.0.0.1"
@@ -63,6 +67,16 @@ final class DaemonController: ObservableObject {
     private var process: Process?
     private var outputPipe: Pipe?
     private let logQueue = DispatchQueue(label: "com.teleport.daemon.logs")
+
+    /// What we were running when sleep hit, so we can offer a one-tap
+    /// resume after wake. Hosts can't auto-resume because the passphrase
+    /// has rotated; joiners can.
+    private struct Snapshot {
+        let mode: DaemonMode
+        let ip: String?
+        let passphrase: Passphrase
+    }
+    private var preSleepSnapshot: Snapshot?
 
     init() {
         resolvedDaemonPath = locateDaemonBinary()
@@ -173,6 +187,41 @@ final class DaemonController: ObservableObject {
         process?.terminate()
     }
 
+    /// Called by `AppDelegate` from `NSWorkspace.willSleepNotification`.
+    /// Records what we were doing so we can resume on wake (joiners only —
+    /// host passphrases are session-scoped) and stops the daemon so the
+    /// TCP socket closes cleanly.
+    func handleSystemSleep() {
+        guard isRunning else { return }
+        if let mode = mode, let pp = activePassphrase, mode == .join {
+            preSleepSnapshot = Snapshot(mode: mode, ip: peerIP, passphrase: pp)
+        }
+        append("💤 System going to sleep — stopping daemon.")
+        stopDaemon()
+    }
+
+    /// Called by `AppDelegate` from `NSWorkspace.didWakeNotification`.
+    /// If we have a snapshot of a join session, restart it; otherwise just
+    /// surface a banner so the user knows to restart manually.
+    func handleSystemWake() {
+        guard let snap = preSleepSnapshot else {
+            if statusBanner == nil { return }
+            statusBanner = nil
+            return
+        }
+        preSleepSnapshot = nil
+        statusBanner = "Reconnecting after wake…"
+        append("⏰ System woke — reconnecting to \(snap.ip ?? peerIP)…")
+        // Brief delay lets the network interface come back up.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self else { return }
+            self.startDaemon(mode: snap.mode, ip: snap.ip, passphrase: snap.passphrase)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                self?.statusBanner = nil
+            }
+        }
+    }
+
     func clearLogs() {
         logs.removeAll()
         append("🧹 Log cleared.")
@@ -229,6 +278,7 @@ final class DaemonController: ObservableObject {
         if logs.count > maxLogs {
             logs.removeFirst(logs.count - maxLogs)
         }
+        LogPersistence.shared.append(text)
     }
 
     /// Parse `(N bytes)` out of daemon log lines so the dashboard counter

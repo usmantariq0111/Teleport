@@ -3,11 +3,13 @@ import SwiftUI
 struct DashboardView: View {
     @EnvironmentObject var daemon: DaemonController
     @StateObject private var folder = WatchFolderManager.shared
+    @StateObject private var bonjour = BonjourBrowser.shared
     @State private var ipDraft: String = ""
     @State private var now: Date = Date()
     @State private var modeDraft: DaemonMode = .host
     @State private var passphraseDraft: String = ""
     @State private var passphraseError: String?
+    @State private var resolvingPeerID: String?
 
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -20,6 +22,9 @@ struct DashboardView: View {
                     folderEmptyState
                 } else {
                     folderCard
+                    if let banner = daemon.statusBanner {
+                        statusBanner(banner)
+                    }
                     if daemon.isRunning, let pp = daemon.activePassphrase {
                         PassphraseCard(passphrase: pp, mode: daemon.mode)
                     }
@@ -36,8 +41,22 @@ struct DashboardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(VisualEffectView(material: .underWindowBackground))
-        .onAppear { ipDraft = daemon.peerIP }
+        .onAppear {
+            ipDraft = daemon.peerIP
+            updateBrowserState()
+        }
         .onReceive(ticker) { now = $0 }
+        .onChange(of: modeDraft) { _, _ in updateBrowserState() }
+        .onChange(of: daemon.isRunning) { _, _ in updateBrowserState() }
+        .onDisappear { bonjour.stop() }
+    }
+
+    private func updateBrowserState() {
+        if modeDraft == .join && !daemon.isRunning {
+            bonjour.start()
+        } else {
+            bonjour.stop()
+        }
     }
 
     // MARK: - Sections
@@ -122,6 +141,27 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity)
         .padding(Theme.Spacing.xl)
         .card(padding: Theme.Spacing.lg)
+    }
+
+    private func statusBanner(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(text)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(Theme.Palette.accent)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                .fill(Theme.Palette.accent.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                .stroke(Theme.Palette.accent.opacity(0.3), lineWidth: 1)
+        )
     }
 
     /// Compact card showing the active folder, with quick actions.
@@ -213,6 +253,8 @@ struct DashboardView: View {
             .disabled(daemon.isRunning)
 
             if modeDraft == .join {
+                discoveredPeersSection
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Peer IP Address")
                         .font(.system(size: 11, weight: .semibold))
@@ -275,6 +317,91 @@ struct DashboardView: View {
             }
         }
         .card(padding: Theme.Spacing.md)
+    }
+
+    private var discoveredPeersSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("Nearby Peers")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textMuted)
+                if bonjour.isBrowsing && bonjour.peers.isEmpty {
+                    ProgressView().controlSize(.mini)
+                }
+                Spacer()
+                Text("\(bonjour.peers.count) found")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Theme.Palette.textMuted)
+            }
+
+            if bonjour.peers.isEmpty {
+                Text("Searching for hosts on this network…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Palette.textMuted)
+                    .padding(.vertical, 4)
+            } else {
+                VStack(spacing: 4) {
+                    ForEach(bonjour.peers) { peer in
+                        peerRow(peer)
+                    }
+                }
+            }
+        }
+    }
+
+    private func peerRow(_ peer: BonjourBrowser.DiscoveredPeer) -> some View {
+        Button {
+            selectPeer(peer)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "laptopcomputer")
+                    .foregroundStyle(Theme.Palette.accent)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(peer.displayName)
+                        .font(.system(size: 12, weight: .semibold))
+                    if let v = peer.txtVersion {
+                        Text("Teleport v\(v)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Theme.Palette.textMuted)
+                    }
+                }
+                Spacer()
+                if resolvingPeerID == peer.id {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textMuted)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Theme.Palette.surfaceAlt.opacity(0.6))
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(daemon.isRunning || resolvingPeerID != nil)
+    }
+
+    private func selectPeer(_ peer: BonjourBrowser.DiscoveredPeer) {
+        resolvingPeerID = peer.id
+        bonjour.resolve(peer) { result in
+            DispatchQueue.main.async {
+                resolvingPeerID = nil
+                switch result {
+                case .success(let endpoint):
+                    ipDraft = endpoint.host
+                    daemon.peerIP = endpoint.host
+                    daemon.port = endpoint.port
+                case .failure:
+                    passphraseError = "Could not resolve \(peer.displayName). Try entering the IP manually."
+                }
+            }
+        }
     }
 
     private func startSession() {

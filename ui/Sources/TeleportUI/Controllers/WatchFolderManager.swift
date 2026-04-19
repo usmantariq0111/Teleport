@@ -13,12 +13,21 @@ final class WatchFolderManager: ObservableObject {
     @Published private(set) var folderURL: URL?
     @Published private(set) var recentFolders: [URL] = []
 
-    private let kFolderKey = "teleport.watchFolder.path"
-    private let kRecentKey = "teleport.watchFolder.recent"
+    private let kFolderKey   = "teleport.watchFolder.path"
+    private let kRecentKey   = "teleport.watchFolder.recent"
+    private let kBookmarkKey = "teleport.watchFolder.bookmark"
     private let maxRecent = 5
 
     init() {
-        if let stored = UserDefaults.standard.string(forKey: kFolderKey) {
+        // Prefer the bookmark — it survives the user moving/renaming the
+        // folder. Fall back to the raw path for older installs that
+        // never had a bookmark stored.
+        if let bookmark = UserDefaults.standard.data(forKey: kBookmarkKey),
+           let resolved = Self.resolveBookmark(bookmark) {
+            folderURL = resolved
+            // Path may have changed since the bookmark was written.
+            UserDefaults.standard.set(resolved.path, forKey: kFolderKey)
+        } else if let stored = UserDefaults.standard.string(forKey: kFolderKey) {
             let url = URL(fileURLWithPath: stored)
             if FileManager.default.fileExists(atPath: stored) {
                 folderURL = url
@@ -29,6 +38,29 @@ final class WatchFolderManager: ObservableObject {
                 .filter { FileManager.default.fileExists(atPath: $0) }
                 .map { URL(fileURLWithPath: $0) }
         }
+    }
+
+    /// Resolve a stored bookmark blob back to a URL, refreshing it
+    /// transparently if the system reports `isStale`. Returns nil if the
+    /// bookmark is invalid or the underlying folder is gone for good.
+    private static func resolveBookmark(_ data: Data) -> URL? {
+        var isStale = false
+        guard let url = try? URL(
+            resolvingBookmarkData: data,
+            options: [.withSecurityScope],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        if isStale,
+           let refreshed = try? url.bookmarkData(
+               options: [.withSecurityScope],
+               includingResourceValuesForKeys: nil,
+               relativeTo: nil
+           ) {
+            UserDefaults.standard.set(refreshed, forKey: "teleport.watchFolder.bookmark")
+        }
+        return url
     }
 
     /// Convenience: the folder's display name (last path component).
@@ -81,10 +113,19 @@ final class WatchFolderManager: ObservableObject {
     }
 
     /// Programmatically set the folder (used both by the picker and for
-    /// switching between recents).
+    /// switching between recents). Stores both a path string (for legacy
+    /// readers and for passing to the daemon CLI) and a security-scoped
+    /// bookmark so we can find the folder again after a rename or move.
     func setFolder(_ url: URL) {
         folderURL = url
         UserDefaults.standard.set(url.path, forKey: kFolderKey)
+        if let bookmark = try? url.bookmarkData(
+            options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        ) {
+            UserDefaults.standard.set(bookmark, forKey: kBookmarkKey)
+        }
         addToRecents(url)
     }
 
@@ -92,6 +133,7 @@ final class WatchFolderManager: ObservableObject {
     func clearFolder() {
         folderURL = nil
         UserDefaults.standard.removeObject(forKey: kFolderKey)
+        UserDefaults.standard.removeObject(forKey: kBookmarkKey)
     }
 
     func revealInFinder() {

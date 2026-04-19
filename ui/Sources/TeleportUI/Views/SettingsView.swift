@@ -151,8 +151,22 @@ struct SettingsView: View {
                         InfoRow(label: "Working Directory",
                                 value: FileManager.default.currentDirectoryPath,
                                 monospaced: true)
+                        InfoRow(label: "Log File",
+                                value: LogPersistence.shared.displayPath,
+                                monospaced: true)
                         InfoRow(label: "App Version", value: Self.appVersion)
                         InfoRow(label: "macOS", value: ProcessInfo.processInfo.operatingSystemVersionString)
+
+                        HStack(spacing: 8) {
+                            SecondaryButton("Reveal Log", systemImage: "doc.text.magnifyingglass") {
+                                NSWorkspace.shared.activateFileViewerSelecting([LogPersistence.shared.fileURL])
+                            }
+                            SecondaryButton("Copy Log Path", systemImage: "doc.on.doc") {
+                                let pb = NSPasteboard.general
+                                pb.clearContents()
+                                pb.setString(LogPersistence.shared.fileURL.path, forType: .string)
+                            }
+                        }
                     }
                 }
 
