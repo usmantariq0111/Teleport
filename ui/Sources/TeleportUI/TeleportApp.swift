@@ -228,6 +228,18 @@ struct TeleportApp: App {
         .windowStyle(.hiddenTitleBar)
         
         MenuBarExtra("Teleport", systemImage: daemon.isRunning ? "bolt.horizontal.fill" : "bolt.horizontal") {
+            Button("Open Dashboard") {
+                NSApp.activate(ignoringOtherApps: true)
+                for window in NSApp.windows {
+                    // Ignore the tiny menu bar window itself
+                    if window.className != "NSStatusBarWindow" {
+                        window.makeKeyAndOrderFront(nil)
+                    }
+                }
+            }
+            
+            Divider()
+            
             Button(daemon.isRunning ? "Stop Daemon" : "Start Host") {
                 if daemon.isRunning {
                     daemon.stopDaemon()
