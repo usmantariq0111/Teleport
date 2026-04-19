@@ -159,6 +159,74 @@ struct SecondaryButton: View {
     }
 }
 
+/// Hero card that prominently displays the active session's passphrase
+/// with quick "copy" affordance. Hosts need to share it; joiners get to
+/// double-check what they typed against what the host says.
+struct PassphraseCard: View {
+    let passphrase: Passphrase
+    let mode: DaemonMode?
+
+    @State private var copiedPulse = false
+
+    private var headline: String {
+        switch mode {
+        case .host: return "Share this passphrase with your peer"
+        case .join: return "Connected with this passphrase"
+        case .none: return "Session passphrase"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.accent)
+                Text(headline.uppercased())
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .tracking(0.7)
+                    .foregroundStyle(Theme.Palette.textMuted)
+                Spacer()
+                if copiedPulse {
+                    Text("Copied")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Theme.Palette.success)
+                        .transition(.opacity)
+                }
+            }
+
+            HStack(spacing: 12) {
+                Text(passphrase.display)
+                    .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Spacer()
+                Button {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(passphrase.display, forType: .string)
+                    withAnimation(.easeInOut(duration: 0.2)) { copiedPulse = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                        withAnimation(.easeOut(duration: 0.4)) { copiedPulse = false }
+                    }
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc.fill")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.Palette.accent)
+            }
+        }
+        .card(padding: Theme.Spacing.md)
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                .stroke(Theme.Palette.accent.opacity(0.35), lineWidth: 1)
+        )
+    }
+}
+
 /// Small label/value row used in side panels.
 struct InfoRow: View {
     let label: String

@@ -47,6 +47,11 @@ final class DaemonController: ObservableObject {
     @Published private(set) var fullFileCount: Int = 0
     @Published private(set) var resolvedDaemonPath: String? = nil
 
+    /// The passphrase active for the current session. When hosting, this is
+    /// the freshly-generated code shown to the user. When joining, this is
+    /// what the user typed/pasted. Cleared on stop.
+    @Published private(set) var activePassphrase: Passphrase? = nil
+
     // MARK: - Config
 
     @AppStorage("teleport.peerIP")  var peerIP: String = "127.0.0.1"
@@ -65,7 +70,10 @@ final class DaemonController: ObservableObject {
 
     // MARK: - Public API
 
-    func startDaemon(mode: DaemonMode, ip: String? = nil) {
+    /// Start the daemon. For `.host`, `passphrase` is optional — if `nil`
+    /// we generate a fresh one. For `.join`, `passphrase` is required and
+    /// must match what the host displays.
+    func startDaemon(mode: DaemonMode, ip: String? = nil, passphrase: Passphrase? = nil) {
         guard !isRunning else { return }
 
         guard let folderURL = WatchFolderManager.shared.folderURL else {
@@ -85,13 +93,28 @@ final class DaemonController: ObservableObject {
         }
         resolvedDaemonPath = daemonPath
 
+        // Resolve passphrase up front so we can display it before launch.
+        let resolvedPassphrase: Passphrase
+        switch mode {
+        case .host:
+            resolvedPassphrase = passphrase ?? Passphrase.random()
+        case .join:
+            guard let p = passphrase else {
+                append("❌ A passphrase is required to join. Ask the host for the code shown on its dashboard.")
+                return
+            }
+            resolvedPassphrase = p
+        }
+
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: daemonPath)
-        // Run the daemon with the chosen folder as its working directory
-        // so any relative paths or .gitignore lookups resolve correctly.
         proc.currentDirectoryURL = folderURL
 
-        var args: [String] = ["--folder", folderURL.path, "--port", String(port)]
+        var args: [String] = [
+            "--folder", folderURL.path,
+            "--port", String(port),
+            "--passphrase", resolvedPassphrase.display,
+        ]
         switch mode {
         case .host:
             args.append("host")
@@ -113,7 +136,7 @@ final class DaemonController: ObservableObject {
                 let lineString = String(line)
                 Task { @MainActor [weak self] in
                     self?.append(lineString)
-                    self?.updateStats(for: lineString, byteCount: data.count)
+                    self?.updateStats(for: lineString)
                 }
             }
         }
@@ -131,10 +154,14 @@ final class DaemonController: ObservableObject {
             self.isRunning = true
             self.mode = mode
             self.startedAt = Date()
+            self.activePassphrase = resolvedPassphrase
             append("📁 Watching folder: \(folderURL.path)")
             switch mode {
-            case .host: append("🚀 Host listening on port \(port)…")
-            case .join: append("🚀 Joining peer at \(ip ?? peerIP):\(port)…")
+            case .host:
+                append("🚀 Host listening on port \(port)…")
+                append("🔑 Share this passphrase with the joining peer: \(resolvedPassphrase.display)")
+            case .join:
+                append("🚀 Joining peer at \(ip ?? peerIP):\(port)…")
             }
         } catch {
             append("❌ Failed to start daemon: \(error.localizedDescription)")
@@ -192,6 +219,7 @@ final class DaemonController: ObservableObject {
         isRunning = false
         mode = nil
         startedAt = nil
+        activePassphrase = nil
         append("🛑 Daemon stopped.")
     }
 
@@ -203,10 +231,26 @@ final class DaemonController: ObservableObject {
         }
     }
 
-    private func updateStats(for line: String, byteCount: Int) {
-        bytesProcessed += byteCount
+    /// Parse `(N bytes)` out of daemon log lines so the dashboard counter
+    /// reflects actual file payload bytes streamed, not stdout chatter.
+    private func updateStats(for line: String) {
         if line.contains("🧩") { patchCount += 1 }
         if line.contains("🌐") { fullFileCount += 1 }
+        if let bytes = Self.bytesFromLog(line) {
+            bytesProcessed += bytes
+        }
+    }
+
+    private static let byteCountRegex: NSRegularExpression = {
+        try! NSRegularExpression(pattern: #"\((\d+)\s*bytes\)"#)
+    }()
+
+    private static func bytesFromLog(_ line: String) -> Int? {
+        let range = NSRange(line.startIndex..., in: line)
+        guard let m = byteCountRegex.firstMatch(in: line, range: range),
+              let r = Range(m.range(at: 1), in: line)
+        else { return nil }
+        return Int(line[r])
     }
 
     /// Resolution order:

@@ -30,6 +30,40 @@ struct MenuBarContent: View {
                 }
             }
 
+            // When hosting, surface the passphrase here too so the user
+            // doesn't have to open the dashboard just to copy it.
+            if daemon.isRunning,
+               daemon.mode == .host,
+               let pp = daemon.activePassphrase {
+                Divider()
+                Button {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(pp.display, forType: .string)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "key.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.accent)
+                            .frame(width: 16)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("Passphrase (click to copy)")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.Palette.textMuted)
+                            Text(pp.display)
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+
             if daemon.isRunning {
                 menuButton(
                     title: "Stop Daemon",
@@ -46,12 +80,14 @@ struct MenuBarContent: View {
                 ) {
                     daemon.startDaemon(mode: .host)
                 }
+                // Joining requires a passphrase — that lives in the
+                // dashboard. Open it instead of trying to start blindly.
                 menuButton(
-                    title: "Join \(daemon.peerIP)",
+                    title: "Join a Peer…",
                     systemImage: "link",
                     disabled: folder.folderURL == nil
                 ) {
-                    daemon.startDaemon(mode: .join)
+                    AppDelegate.shared.showDashboard()
                 }
             }
 

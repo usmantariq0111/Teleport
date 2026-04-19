@@ -121,6 +121,28 @@ struct SettingsView: View {
                     }
                 }
 
+                section("Security") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "lock.shield.fill")
+                                .font(.system(size: 22))
+                                .foregroundStyle(Theme.Palette.success)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("End-to-end encrypted")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text("Noise NNpsk0 (Curve25519 · ChaCha20-Poly1305 · BLAKE2s)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(Theme.Palette.textMuted)
+                            }
+                            Spacer()
+                        }
+                        Text("Each session uses a one-time passphrase shared out-of-band. Wrong passphrase, wrong peer — connections are rejected at handshake.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.Palette.textMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
                 section("Diagnostics") {
                     VStack(alignment: .leading, spacing: 8) {
                         InfoRow(label: "Daemon Binary",

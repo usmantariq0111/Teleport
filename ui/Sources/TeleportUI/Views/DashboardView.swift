@@ -5,6 +5,9 @@ struct DashboardView: View {
     @StateObject private var folder = WatchFolderManager.shared
     @State private var ipDraft: String = ""
     @State private var now: Date = Date()
+    @State private var modeDraft: DaemonMode = .host
+    @State private var passphraseDraft: String = ""
+    @State private var passphraseError: String?
 
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -17,10 +20,13 @@ struct DashboardView: View {
                     folderEmptyState
                 } else {
                     folderCard
+                    if daemon.isRunning, let pp = daemon.activePassphrase {
+                        PassphraseCard(passphrase: pp, mode: daemon.mode)
+                    }
                     statsGrid
                     HStack(alignment: .top, spacing: Theme.Spacing.md) {
                         controlPanel
-                            .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
+                            .frame(minWidth: 360, idealWidth: 400, maxWidth: 460)
                         sessionInfoPanel
                     }
                     recentActivity
@@ -199,28 +205,68 @@ struct DashboardView: View {
                 .font(.system(size: 14, weight: .bold, design: .rounded))
                 .foregroundStyle(Theme.Palette.textMuted)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Peer IP Address")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.textMuted)
-                TextField("127.0.0.1", text: $ipDraft, onCommit: {
-                    daemon.peerIP = ipDraft
-                })
-                .textFieldStyle(.roundedBorder)
-                .disabled(daemon.isRunning)
-                .onChange(of: ipDraft) { _, newValue in
-                    daemon.peerIP = newValue
+            Picker("", selection: $modeDraft) {
+                Text("Host").tag(DaemonMode.host)
+                Text("Join").tag(DaemonMode.join)
+            }
+            .pickerStyle(.segmented)
+            .disabled(daemon.isRunning)
+
+            if modeDraft == .join {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Peer IP Address")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textMuted)
+                    TextField("192.168.1.42", text: $ipDraft, onCommit: {
+                        daemon.peerIP = ipDraft
+                    })
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(daemon.isRunning)
+                    .onChange(of: ipDraft) { _, newValue in
+                        daemon.peerIP = newValue
+                    }
                 }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Passphrase")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.textMuted)
+                        Spacer()
+                        Button {
+                            if let s = NSPasteboard.general.string(forType: .string) {
+                                passphraseDraft = s
+                            }
+                        } label: {
+                            Image(systemName: "doc.on.clipboard")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Paste from clipboard")
+                        .disabled(daemon.isRunning)
+                    }
+                    TextField("ABCDE-FGHIJ-KLMNO-PQRSTUV", text: $passphraseDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                        .disabled(daemon.isRunning)
+                    if let err = passphraseError {
+                        Text(err)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.Palette.danger)
+                    }
+                }
+            } else {
+                Text("Hosting will generate a one-time passphrase. Share it with the joining peer.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Palette.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if !daemon.isRunning {
-                VStack(spacing: 10) {
-                    PrimaryButton("Start Host", systemImage: "antenna.radiowaves.left.and.right") {
-                        daemon.startDaemon(mode: .host)
-                    }
-                    SecondaryButton("Join Peer", systemImage: "link") {
-                        daemon.startDaemon(mode: .join, ip: ipDraft)
-                    }
+                PrimaryButton(
+                    modeDraft == .host ? "Start Host" : "Join Peer",
+                    systemImage: modeDraft == .host ? "antenna.radiowaves.left.and.right" : "link"
+                ) {
+                    startSession()
                 }
             } else {
                 SecondaryButton("Stop Session", systemImage: "stop.fill", role: .destructive) {
@@ -229,6 +275,20 @@ struct DashboardView: View {
             }
         }
         .card(padding: Theme.Spacing.md)
+    }
+
+    private func startSession() {
+        passphraseError = nil
+        switch modeDraft {
+        case .host:
+            daemon.startDaemon(mode: .host)
+        case .join:
+            guard let parsed = Passphrase.parse(passphraseDraft) else {
+                passphraseError = "Invalid passphrase. Expected the code shown by the host (e.g. ABCDE-FGHIJ-KLMNO-PQRSTUV)."
+                return
+            }
+            daemon.startDaemon(mode: .join, ip: ipDraft, passphrase: parsed)
+        }
     }
 
     private var sessionInfoPanel: some View {
