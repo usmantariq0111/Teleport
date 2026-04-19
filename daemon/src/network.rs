@@ -2,6 +2,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -16,24 +17,45 @@ pub struct SyncMessage {
     pub content: Vec<u8>,
 }
 
-pub async fn start_host(rx: mpsc::Receiver<SyncMessage>, file_hashes: Arc<DashMap<String, u64>>, file_state: Arc<DashMap<String, String>>) {
-    println!("📡 Host mode: Listening on 0.0.0.0:8080...");
-    let listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
+pub async fn start_host(
+    port: u16,
+    root_path: PathBuf,
+    rx: mpsc::Receiver<SyncMessage>,
+    file_hashes: Arc<DashMap<String, u64>>,
+    file_state: Arc<DashMap<String, String>>,
+) {
+    let bind_addr = format!("0.0.0.0:{}", port);
+    println!("📡 Host mode: Listening on {}...", bind_addr);
+
+    let listener = match TcpListener::bind(&bind_addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("❌ Failed to bind {}: {}", bind_addr, e);
+            return;
+        }
+    };
 
     if let Ok((socket, addr)) = listener.accept().await {
         println!("✅ Client connected from: {:?}", addr);
-        handle_connection(socket, rx, file_hashes, file_state).await;
+        handle_connection(socket, root_path, rx, file_hashes, file_state).await;
     }
 }
 
-pub async fn start_client(ip: &str, rx: mpsc::Receiver<SyncMessage>, file_hashes: Arc<DashMap<String, u64>>, file_state: Arc<DashMap<String, String>>) {
-    let addr = format!("{}:8080", ip);
+pub async fn start_client(
+    ip: &str,
+    port: u16,
+    root_path: PathBuf,
+    rx: mpsc::Receiver<SyncMessage>,
+    file_hashes: Arc<DashMap<String, u64>>,
+    file_state: Arc<DashMap<String, String>>,
+) {
+    let addr = format!("{}:{}", ip, port);
     println!("📡 Join mode: Connecting to {}...", addr);
 
     match TcpStream::connect(&addr).await {
         Ok(socket) => {
             println!("✅ Successfully connected to host!");
-            handle_connection(socket, rx, file_hashes, file_state).await;
+            handle_connection(socket, root_path, rx, file_hashes, file_state).await;
         }
         Err(e) => {
             eprintln!("❌ Failed to connect: {}", e);
@@ -41,12 +63,17 @@ pub async fn start_client(ip: &str, rx: mpsc::Receiver<SyncMessage>, file_hashes
     }
 }
 
-async fn handle_connection(socket: TcpStream, mut rx: mpsc::Receiver<SyncMessage>, file_hashes: Arc<DashMap<String, u64>>, file_state: Arc<DashMap<String, String>>) {
+async fn handle_connection(
+    socket: TcpStream,
+    root_path: PathBuf,
+    mut rx: mpsc::Receiver<SyncMessage>,
+    file_hashes: Arc<DashMap<String, u64>>,
+    file_state: Arc<DashMap<String, String>>,
+) {
     let (mut read_half, mut write_half) = socket.into_split();
 
     let read_task = tokio::spawn(async move {
         let mut length_buf = [0u8; 4];
-        let root_path = std::env::current_dir().unwrap();
         
         loop {
             match read_half.read_exact(&mut length_buf).await {

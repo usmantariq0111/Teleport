@@ -71,18 +71,18 @@ make run-ui         # cd ui && swift run
 ```
 
 ### 4. Testing the P2P Sync (Terminal Fallback)
-If you want to run the daemon manually without the Swift UI, you can use the CLI commands:
+If you want to run the daemon manually without the Swift UI, you can use the CLI commands. Both subcommands accept `--folder <path>` (defaults to the current directory) and `--port <port>` (defaults to `8080`).
 
 **Terminal A (The Host):**
 ```bash
 cd daemon
-cargo run -- host
+cargo run -- --folder ~/code/my-project host
 ```
 
 **Terminal B (The Client):**
 ```bash
 cd daemon
-cargo run -- join 127.0.0.1
+cargo run -- --folder ~/code/my-project-mirror join 127.0.0.1
 ```
 
 Any file saved in the directory will be instantly caught by `FSEvents` and streamed to the connected peer!

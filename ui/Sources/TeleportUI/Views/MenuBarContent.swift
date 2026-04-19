@@ -4,6 +4,7 @@ import AppKit
 /// Compact menu rendered when the user clicks the bolt in the menu bar.
 struct MenuBarContent: View {
     @EnvironmentObject var daemon: DaemonController
+    @StateObject private var folder = WatchFolderManager.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -17,6 +18,18 @@ struct MenuBarContent: View {
                 AppDelegate.shared.showDashboard()
             }
 
+            if let _ = folder.folderURL {
+                folderRow
+            } else {
+                menuButton(
+                    title: "Choose Folder…",
+                    systemImage: "folder.fill.badge.plus",
+                    tint: Theme.Palette.accent
+                ) {
+                    folder.pickFolder()
+                }
+            }
+
             if daemon.isRunning {
                 menuButton(
                     title: "Stop Daemon",
@@ -28,13 +41,15 @@ struct MenuBarContent: View {
             } else {
                 menuButton(
                     title: "Start as Host",
-                    systemImage: "antenna.radiowaves.left.and.right"
+                    systemImage: "antenna.radiowaves.left.and.right",
+                    disabled: folder.folderURL == nil
                 ) {
                     daemon.startDaemon(mode: .host)
                 }
                 menuButton(
                     title: "Join \(daemon.peerIP)",
-                    systemImage: "link"
+                    systemImage: "link",
+                    disabled: folder.folderURL == nil
                 ) {
                     daemon.startDaemon(mode: .join)
                 }
@@ -84,10 +99,44 @@ struct MenuBarContent: View {
         .padding(.vertical, 8)
     }
 
+    /// Inline row showing the active folder, with a quick-change action.
+    private var folderRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.Palette.accent)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(folder.folderName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                Text(folder.displayPath)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(Theme.Palette.textMuted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Button {
+                folder.pickFolder()
+            } label: {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Palette.textMuted)
+            }
+            .buttonStyle(.plain)
+            .disabled(daemon.isRunning)
+            .help("Change folder")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+
     private func menuButton(
         title: String,
         systemImage: String,
         tint: Color = .primary,
+        disabled: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -99,11 +148,12 @@ struct MenuBarContent: View {
                     .font(.system(size: 12, weight: .medium))
                 Spacer()
             }
-            .foregroundStyle(tint)
+            .foregroundStyle(disabled ? Theme.Palette.textMuted : tint)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
     }
 }

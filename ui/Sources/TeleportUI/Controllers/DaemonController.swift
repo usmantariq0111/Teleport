@@ -50,6 +50,7 @@ final class DaemonController: ObservableObject {
     // MARK: - Config
 
     @AppStorage("teleport.peerIP")  var peerIP: String = "127.0.0.1"
+    @AppStorage("teleport.port")    var port: Int = 8080
     @AppStorage("teleport.maxLogs") var maxLogs: Int = 500
 
     // MARK: - Private
@@ -67,6 +68,17 @@ final class DaemonController: ObservableObject {
     func startDaemon(mode: DaemonMode, ip: String? = nil) {
         guard !isRunning else { return }
 
+        guard let folderURL = WatchFolderManager.shared.folderURL else {
+            append("❌ No folder selected. Pick a folder to sync from the dashboard before starting.")
+            return
+        }
+
+        guard FileManager.default.fileExists(atPath: folderURL.path) else {
+            append("❌ Selected folder no longer exists: \(folderURL.path)")
+            WatchFolderManager.shared.clearFolder()
+            return
+        }
+
         guard let daemonPath = locateDaemonBinary() else {
             append("❌ Could not locate `teleport-daemon` binary. Build it via `cargo build` in /daemon, or place it next to Teleport.app.")
             return
@@ -75,13 +87,19 @@ final class DaemonController: ObservableObject {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: daemonPath)
+        // Run the daemon with the chosen folder as its working directory
+        // so any relative paths or .gitignore lookups resolve correctly.
+        proc.currentDirectoryURL = folderURL
 
+        var args: [String] = ["--folder", folderURL.path, "--port", String(port)]
         switch mode {
         case .host:
-            proc.arguments = ["host"]
+            args.append("host")
         case .join:
-            proc.arguments = ["join", ip ?? peerIP]
+            args.append("join")
+            args.append(ip ?? peerIP)
         }
+        proc.arguments = args
 
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -113,9 +131,10 @@ final class DaemonController: ObservableObject {
             self.isRunning = true
             self.mode = mode
             self.startedAt = Date()
+            append("📁 Watching folder: \(folderURL.path)")
             switch mode {
-            case .host: append("🚀 Host listening on port 8080…")
-            case .join: append("🚀 Joining peer at \(ip ?? peerIP)…")
+            case .host: append("🚀 Host listening on port \(port)…")
+            case .join: append("🚀 Joining peer at \(ip ?? peerIP):\(port)…")
             }
         } catch {
             append("❌ Failed to start daemon: \(error.localizedDescription)")
@@ -140,6 +159,12 @@ final class DaemonController: ObservableObject {
         pb.clearContents()
         pb.setString(text, forType: .string)
         append("📋 Copied \(logs.count) log lines to clipboard.")
+    }
+
+    /// True only when there's a valid folder selected AND we can find the
+    /// daemon binary — the two conditions required to start a session.
+    var canStart: Bool {
+        WatchFolderManager.shared.folderURL != nil && resolvedDaemonPath != nil
     }
 
     var uptimeString: String {

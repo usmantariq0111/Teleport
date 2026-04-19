@@ -2,9 +2,11 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var daemon: DaemonController
+    @StateObject private var folder = WatchFolderManager.shared
     @AppStorage("teleport.autoScroll")  private var autoScroll: Bool = true
     @AppStorage("teleport.maxLogs")     private var maxLogs: Int = 500
     @AppStorage("teleport.peerIP")      private var peerIP: String = "127.0.0.1"
+    @AppStorage("teleport.port")        private var port: Int = 8080
 
     var body: some View {
         ScrollView {
@@ -12,10 +14,86 @@ struct SettingsView: View {
                 Text("Settings")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
 
+                section("Sync Folder") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let _ = folder.folderURL {
+                            HStack(spacing: 12) {
+                                Image(systemName: "folder.fill")
+                                    .font(.system(size: 22))
+                                    .foregroundStyle(Theme.Palette.accent)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(folder.folderName)
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Text(folder.displayPath)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(Theme.Palette.textMuted)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Spacer()
+                            }
+                            HStack(spacing: 8) {
+                                SecondaryButton("Change…", systemImage: "folder.fill") {
+                                    folder.pickFolder()
+                                }
+                                .disabled(daemon.isRunning)
+                                SecondaryButton("Reveal in Finder", systemImage: "arrow.up.right.square") {
+                                    folder.revealInFinder()
+                                }
+                            }
+                        } else {
+                            Text("No folder selected.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.Palette.textMuted)
+                            SecondaryButton("Choose Folder…", systemImage: "folder.fill.badge.plus") {
+                                folder.pickFolder()
+                            }
+                        }
+
+                        if !folder.recentFolders.isEmpty {
+                            Divider().padding(.vertical, 4)
+                            Text("RECENT")
+                                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                                .tracking(0.5)
+                                .foregroundStyle(Theme.Palette.textMuted)
+                            ForEach(folder.recentFolders, id: \.self) { url in
+                                Button {
+                                    folder.setFolder(url)
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "clock.arrow.circlepath")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(Theme.Palette.textMuted)
+                                        Text(url.lastPathComponent)
+                                            .font(.system(size: 12, weight: .semibold))
+                                        Text(url.path)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundStyle(Theme.Palette.textMuted)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(daemon.isRunning || url.path == folder.folderURL?.path)
+                            }
+                        }
+                    }
+                }
+
                 section("Network") {
                     VStack(alignment: .leading, spacing: 12) {
                         labeledField("Default Peer IP", binding: $peerIP, placeholder: "127.0.0.1")
                             .disabled(daemon.isRunning)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Port")
+                                .font(.system(size: 12, weight: .semibold))
+                            TextField("8080", value: $port, format: .number.grouping(.never))
+                                .textFieldStyle(.roundedBorder)
+                                .disabled(daemon.isRunning)
+                        }
                     }
                 }
 

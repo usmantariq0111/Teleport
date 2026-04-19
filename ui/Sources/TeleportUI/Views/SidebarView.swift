@@ -24,6 +24,7 @@ enum DashboardTab: String, CaseIterable, Identifiable {
 struct SidebarView: View {
     @Binding var selection: DashboardTab
     @EnvironmentObject var daemon: DaemonController
+    @StateObject private var folder = WatchFolderManager.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -44,6 +45,17 @@ struct SidebarView: View {
             Spacer()
 
             VStack(alignment: .leading, spacing: 8) {
+                if let _ = folder.folderURL {
+                    HStack(spacing: 6) {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.accent)
+                        Text(folder.folderName)
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
                 StatusPill(isRunning: daemon.isRunning, mode: daemon.mode)
                 if daemon.isRunning {
                     Text("Uptime \(daemon.uptimeString)")
