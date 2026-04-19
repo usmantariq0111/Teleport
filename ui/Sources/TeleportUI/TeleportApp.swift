@@ -3,27 +3,33 @@ import Foundation
 
 class DaemonController: ObservableObject {
     @Published var isRunning = false
-    @Published var lastLog = "Waiting to start..."
+    @Published var logs: [String] = ["Ready to synchronize."]
     
     private var process: Process?
     private var outputPipe: Pipe?
     
+    func appendLog(_ text: String) {
+        DispatchQueue.main.async {
+            self.logs.append(text)
+            // Keep the last 150 lines to save memory
+            if self.logs.count > 150 {
+                self.logs.removeFirst()
+            }
+        }
+    }
+    
     func startDaemon(mode: String, ip: String = "") {
         guard !isRunning else { return }
         
-        // Find the absolute path to our compiled Rust binary
         var daemonPath = ""
-        
-        // Check if we are running inside a bundled .app (Production)
         if let bundlePath = Bundle.main.url(forResource: "teleport-daemon", withExtension: nil)?.path {
             daemonPath = bundlePath
         } else {
-            // Fallback to local dev path
             daemonPath = NSHomeDirectory() + "/Desktop/Project/Teleport/daemon/target/debug/teleport-daemon"
         }
         
         if !FileManager.default.fileExists(atPath: daemonPath) {
-            self.lastLog = "Error: Rust binary not found at \(daemonPath)"
+            appendLog("❌ Error: Rust binary not found at \(daemonPath)")
             return
         }
         
@@ -44,12 +50,9 @@ class DaemonController: ObservableObject {
             let data = handle.availableData
             if data.isEmpty { return }
             if let str = String(data: data, encoding: .utf8) {
-                // Split by newline and get the last valid line to show in UI
                 let lines = str.split(separator: "\n").map { String($0) }
-                if let last = lines.last, !last.isEmpty {
-                    DispatchQueue.main.async {
-                        self?.lastLog = last
-                    }
+                for line in lines where !line.isEmpty {
+                    self?.appendLog(line)
                 }
             }
         }
@@ -58,11 +61,11 @@ class DaemonController: ObservableObject {
             try process?.run()
             DispatchQueue.main.async {
                 self.isRunning = true
-                self.lastLog = mode == "host" ? "📡 Host listening on 8080..." : "📡 Joining \(ip)..."
+                self.appendLog(mode == "host" ? "🚀 Host listening on 8080..." : "🚀 Joining \(ip)...")
             }
         } catch {
             DispatchQueue.main.async {
-                self.lastLog = "❌ Failed to start: \(error.localizedDescription)"
+                self.appendLog("❌ Failed to start: \(error.localizedDescription)")
             }
         }
     }
@@ -74,71 +77,182 @@ class DaemonController: ObservableObject {
         outputPipe = nil
         DispatchQueue.main.async {
             self.isRunning = false
-            self.lastLog = "Stopped."
+            self.appendLog("🛑 Daemon stopped.")
         }
+    }
+}
+
+struct ContentView: View {
+    @EnvironmentObject var daemon: DaemonController
+    @State private var ipAddress = "127.0.0.1"
+    
+    var body: some View {
+        HStack(spacing: 0) {
+            // Left Panel: Controls
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Teleport")
+                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                        .foregroundStyle(
+                            LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        )
+                    Text("Ultra-fast P2P Sync Engine")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Configuration")
+                        .font(.headline)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Peer IP Address")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextField("127.0.0.1", text: $ipAddress)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(daemon.isRunning)
+                    }
+                }
+                
+                Spacer()
+                
+                // Status Indicator
+                HStack {
+                    Circle()
+                        .fill(daemon.isRunning ? Color.green : Color.red)
+                        .frame(width: 12, height: 12)
+                        .shadow(color: daemon.isRunning ? .green : .red, radius: daemon.isRunning ? 8 : 2)
+                        .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: daemon.isRunning)
+                    
+                    Text(daemon.isRunning ? "Connected" : "Disconnected")
+                        .font(.headline)
+                        .foregroundColor(daemon.isRunning ? .green : .secondary)
+                }
+                .padding(.bottom, 8)
+                
+                // Action Buttons
+                if !daemon.isRunning {
+                    VStack(spacing: 12) {
+                        Button(action: { daemon.startDaemon(mode: "host") }) {
+                            Text("Start Host")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        
+                        Button(action: { daemon.startDaemon(mode: "join", ip: ipAddress) }) {
+                            Text("Join Peer")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                    }
+                } else {
+                    Button(action: { daemon.stopDaemon() }) {
+                        Text("Stop Session")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .foregroundColor(.red)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                }
+            }
+            .padding(30)
+            .frame(width: 320)
+            .background(Material.thin)
+            
+            Divider()
+            
+            // Right Panel: Live Terminal
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("LIVE RUST LOGS")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(.gray)
+                    Spacer()
+                }
+                .padding()
+                .background(Color.black.opacity(0.4))
+                
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(daemon.logs.enumerated()), id: \.offset) { index, log in
+                                Text(log)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundColor(logColor(log))
+                                    .id(index)
+                            }
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .onChange(of: daemon.logs.count) { _ in
+                        withAnimation {
+                            proxy.scrollTo(daemon.logs.count - 1, anchor: .bottom)
+                        }
+                    }
+                }
+                .background(Color(NSColor.windowBackgroundColor).opacity(0.5))
+            }
+            .frame(minWidth: 400, maxWidth: .infinity)
+        }
+        .frame(minWidth: 700, minHeight: 450)
+        .ignoresSafeArea()
+    }
+    
+    private func logColor(_ log: String) -> Color {
+        if log.contains("🧩 Received patch") { return .cyan }
+        if log.contains("🌐 Received full file") { return .blue }
+        if log.contains("✅") { return .green }
+        if log.contains("🚨") || log.contains("❌") || log.contains("Error") { return .red }
+        if log.contains("⚠️") { return .yellow }
+        return .primary
     }
 }
 
 @main
 struct TeleportApp: App {
     @StateObject private var daemon = DaemonController()
-    @State private var ipAddress = "127.0.0.1"
     
     var body: some Scene {
-        MenuBarExtra("Teleport", systemImage: daemon.isRunning ? "bolt.horizontal.fill" : "bolt.horizontal") {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Teleport P2P Sync")
-                    .font(.headline)
-                
-                Text(daemon.lastLog)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(daemon.isRunning ? .green : .secondary)
-                    .lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(Color.black.opacity(0.1))
-                    .cornerRadius(4)
-                
-                Divider()
-                
-                if !daemon.isRunning {
-                    Button(action: {
-                        daemon.startDaemon(mode: "host")
-                    }) {
-                        Label("Start Host", systemImage: "network")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    
-                    Button(action: {
-                        daemon.startDaemon(mode: "join", ip: ipAddress)
-                    }) {
-                        Label("Join Localhost", systemImage: "link")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                } else {
-                    Button(action: {
-                        daemon.stopDaemon()
-                    }) {
-                        Label("Stop Session", systemImage: "stop.circle")
-                            .frame(maxWidth: .infinity)
-                            .foregroundColor(.red)
-                    }
-                    .buttonStyle(.bordered)
-                }
-                
-                Divider()
-                
-                Button("Quit Teleport") {
-                    daemon.stopDaemon()
-                    NSApplication.shared.terminate(nil)
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            .padding()
-            .frame(width: 250)
+        WindowGroup {
+            ContentView()
+                .environmentObject(daemon)
+                .background(VisualEffectView().ignoresSafeArea())
         }
-        .menuBarExtraStyle(.window)
+        .windowStyle(.hiddenTitleBar)
+        
+        MenuBarExtra("Teleport", systemImage: daemon.isRunning ? "bolt.horizontal.fill" : "bolt.horizontal") {
+            Button(daemon.isRunning ? "Stop Daemon" : "Start Host") {
+                if daemon.isRunning {
+                    daemon.stopDaemon()
+                } else {
+                    daemon.startDaemon(mode: "host")
+                }
+            }
+            Divider()
+            Button("Quit Teleport") {
+                daemon.stopDaemon()
+                NSApplication.shared.terminate(nil)
+            }
+        }
     }
+}
+
+// Helper for Native Glass Blur
+struct VisualEffectView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.material = .sidebar
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
