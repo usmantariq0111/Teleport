@@ -215,12 +215,39 @@ struct ContentView: View {
     }
 }
 
+struct MenuContent: View {
+    @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject var daemon: DaemonController
+    
+    var body: some View {
+        Button("Open Dashboard") {
+            openWindow(id: "dashboard")
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        
+        Divider()
+        
+        Button(daemon.isRunning ? "Stop Daemon" : "Start Host") {
+            if daemon.isRunning {
+                daemon.stopDaemon()
+            } else {
+                daemon.startDaemon(mode: "host")
+            }
+        }
+        Divider()
+        Button("Quit Teleport") {
+            daemon.stopDaemon()
+            NSApplication.shared.terminate(nil)
+        }
+    }
+}
+
 @main
 struct TeleportApp: App {
     @StateObject private var daemon = DaemonController()
     
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "dashboard") {
             ContentView()
                 .environmentObject(daemon)
                 .background(VisualEffectView().ignoresSafeArea())
@@ -228,30 +255,8 @@ struct TeleportApp: App {
         .windowStyle(.hiddenTitleBar)
         
         MenuBarExtra("Teleport", systemImage: daemon.isRunning ? "bolt.horizontal.fill" : "bolt.horizontal") {
-            Button("Open Dashboard") {
-                NSApp.activate(ignoringOtherApps: true)
-                for window in NSApp.windows {
-                    // Ignore the tiny menu bar window itself
-                    if window.className != "NSStatusBarWindow" {
-                        window.makeKeyAndOrderFront(nil)
-                    }
-                }
-            }
-            
-            Divider()
-            
-            Button(daemon.isRunning ? "Stop Daemon" : "Start Host") {
-                if daemon.isRunning {
-                    daemon.stopDaemon()
-                } else {
-                    daemon.startDaemon(mode: "host")
-                }
-            }
-            Divider()
-            Button("Quit Teleport") {
-                daemon.stopDaemon()
-                NSApplication.shared.terminate(nil)
-            }
+            MenuContent()
+                .environmentObject(daemon)
         }
     }
 }
