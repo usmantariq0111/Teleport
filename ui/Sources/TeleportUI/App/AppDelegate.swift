@@ -15,14 +15,18 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    static var shared: AppDelegate {
-        guard let d = NSApp.delegate as? AppDelegate else {
-            fatalError("AppDelegate not installed")
-        }
-        return d
-    }
+    /// Captured during `init` so we never have to look up the delegate
+    /// through `NSApp.delegate` — which on macOS 14+ is often a SwiftUI
+    /// proxy that *forwards* to us, not us. Trusting the cast crashed
+    /// the app on macOS 26 (`fatalError` in the menu-bar button action).
+    static private(set) var shared: AppDelegate!
 
     private var dashboardWindow: NSWindow?
+
+    override init() {
+        super.init()
+        AppDelegate.shared = self
+    }
 
     // MARK: - Lifecycle
 
