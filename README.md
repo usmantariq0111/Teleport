@@ -10,18 +10,29 @@ It bypasses the limitations of traditional "Host/Guest" IDE extensions (like VS 
 
 ---
 
+## ✨ Features
+
+- **Blazing Fast File Watching:** Powered by Rust's `notify` crate and macOS `FSEvents` for microsecond detection with zero battery drain.
+- **P2P Tunnel:** Asynchronous TCP tunnel streams file diffs directly over the local network. No centralized cloud servers.
+- **End-to-End Encryption:** Secures your code over the wire using the Noise Protocol (`snow`) and `ChaChaPoly_BLAKE2s`.
+- **Bonjour Discovery:** Automatically discovers peers on your local network using mDNS/DNS-SD. No more typing IP addresses!
+- **Smart Filtering:** Parses your `.gitignore` files to instantly drop noisy events (like heavy `node_modules` saves).
+- **Native macOS UI:** A sleek, premium Menu Bar application built in SwiftUI.
+
+---
+
 ## 🏗️ Architecture
 
 Teleport is built using a hybrid architecture designed for maximum performance and native macOS integration:
 
-1. **The Core Engine (Rust):** A headless background daemon powered by `tokio` and the `notify` crate. It hooks directly into the macOS `FSEvents` API to detect file modifications in microseconds with zero battery drain.
-2. **The P2P Tunnel (Rust):** The daemon uses an asynchronous TCP tunnel to stream file diffs directly to the connected peer over the local network (skipping centralized cloud servers entirely).
-3. **Smart Filtering (Rust):** Integrated with the industry-standard `ignore` crate, the daemon dynamically parses your `.gitignore` files to instantly drop noisy events (like heavy `node_modules` saves).
-4. **The Native Control Center (SwiftUI):** A sleek, premium macOS Menu Bar application that manages the Rust daemon. It spawns the background processes and pipes the real-time FSEvents logs directly into a beautiful native dropdown UI.
+1. **The Core Engine (Rust):** A headless background daemon. It hooks directly into the macOS `FSEvents` API.
+2. **The P2P Tunnel (Rust):** The daemon uses an asynchronous TCP tunnel to stream file diffs directly to the connected peer.
+3. **Smart Filtering (Rust):** Integrated with the industry-standard `ignore` crate.
+4. **The Native Control Center (SwiftUI):** A beautiful native dropdown UI that manages the Rust daemon, handles persistent folder bookmarks, and pipes real-time logs.
 
 ---
 
-## 📥 Download & Install (for users)
+## 📥 Download & Install
 
 The easiest way to use Teleport is to grab the latest pre-built `.dmg` from the [Releases page](../../releases/latest):
 
@@ -41,7 +52,17 @@ The easiest way to use Teleport is to grab the latest pre-built `.dmg` from the 
 
 ---
 
-## 🚀 How to Build & Run Locally (for contributors)
+## 🤝 Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on how to get started, set up your local development environment, and submit pull requests.
+
+Please note that this project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
+
+If you discover a security vulnerability, please follow our [Security Policy](SECURITY.md).
+
+---
+
+## 🚀 How to Build & Run Locally
 
 ### Prerequisites
 - macOS 14 (Sonoma) or newer
@@ -57,8 +78,6 @@ make app-release    # signed-ad-hoc release build
 ```
 
 *Look for the lightning bolt icon in your Mac's Menu Bar at the top right of your screen — click it to open the dashboard.*
-
-The app launches as a true menu-bar utility (`LSUIElement`), so it does **not** show up in the Dock or App Switcher by default. When you open the dashboard from the menu, Teleport temporarily promotes itself to a regular app so the window can take focus, then quietly demotes back once you close the window — no leftover Dock icon.
 
 ### 2. Build a distributable DMG
 ```bash
@@ -85,8 +104,6 @@ cd daemon
 cargo run -- --folder ~/code/my-project-mirror join 127.0.0.1
 ```
 
-Any file saved in the directory will be instantly caught by `FSEvents` and streamed to the connected peer!
-
 ---
 
 ## 📦 Cutting a release (maintainers)
@@ -94,24 +111,11 @@ Any file saved in the directory will be instantly caught by `FSEvents` and strea
 Releases are fully automated by GitHub Actions. To publish a new version:
 
 ```bash
-# bump the version in ui/Resources/Info.plist if you want it baked in,
-# then tag and push:
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
-The [`Release` workflow](.github/workflows/release.yml) will:
-1. Spin up a `macos-14` runner with Xcode + Rust toolchains.
-2. Stamp `Info.plist` with the tag version.
-3. Build the Rust daemon + SwiftUI app in release mode.
-4. Bundle everything into `Teleport.app` with the icon.
-5. Package it as `Teleport-<version>.dmg` (drag-to-/Applications layout).
-6. Compute the SHA-256 checksum.
-7. Create a GitHub Release with the DMG and checksum attached and auto-generated release notes.
-
-You can also trigger a release manually from the **Actions → Release → Run workflow** button.
-
-The [`CI` workflow](.github/workflows/ci.yml) runs on every push and PR — it verifies that both targets build cleanly and uploads a downloadable `.app` artifact for reviewers.
+The [`Release` workflow](.github/workflows/release.yml) will build the app, package it as a DMG, and create a GitHub Release.
 
 ---
 
@@ -121,11 +125,16 @@ The [`CI` workflow](.github/workflows/ci.yml) runs on every push and PR — it v
 - [x] Phase 2: Direct Local P2P TCP Tunnel (Rust)
 - [x] Phase 3: Native macOS Menu Bar Controller (SwiftUI)
 - [x] Phase 4: Dynamic `.gitignore` Filtering (`ignore` crate)
-- [ ] Phase 5: Integrate `automerge-rs` CRDTs for mathematical conflict resolution
-- [ ] Phase 6: Upgrade TCP to `webrtc-rs` for NAT traversal and remote internet syncing
-- [x] Phase 7: GitHub Actions CI/CD for pre-compiled `.dmg` distribution
-- [ ] Phase 8: Code-signing + Apple notarization for one-click installs (no Gatekeeper warning)
+- [x] Phase 5: Bonjour Network Discovery & Persistent Bookmarks
+- [ ] Phase 6: Integrate `automerge-rs` CRDTs for mathematical conflict resolution
+- [ ] Phase 7: Upgrade TCP to `webrtc-rs` for NAT traversal and remote internet syncing
+- [x] Phase 8: GitHub Actions CI/CD for pre-compiled `.dmg` distribution
+- [ ] Phase 9: Code-signing + Apple notarization for one-click installs (no Gatekeeper warning)
 
 ---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 *Built for developers who demand native performance.*
