@@ -90,7 +90,13 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Port")
                                 .font(.system(size: 12, weight: .semibold))
-                            TextField("8080", value: $port, format: .number.grouping(.never))
+                            // Clamp to the IANA dynamic/private range to
+                            // prevent typos like "0", "-1", or "99999"
+                            // from getting passed to the daemon.
+                            TextField("8080", value: Binding(
+                                get: { port },
+                                set: { port = max(1, min(65535, $0)) }
+                            ), format: .number.grouping(.never))
                                 .textFieldStyle(.roundedBorder)
                                 .disabled(daemon.isRunning)
                         }

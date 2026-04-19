@@ -6,16 +6,17 @@ use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watche
 use teleport_daemon::crypto::Passphrase;
 use teleport_daemon::{discovery, network};
 use teleport_daemon::proto::{FileBody, FileEvent};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use xxhash_rust::xxh3::xxh3_64;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Folder to watch and synchronize.
+    /// Folder to watch and synchronize. **Required** — we deliberately do
+    /// not fall back to the current working directory because launching
+    /// from `~` would silently expose the entire home folder.
     #[arg(long, short = 'f', global = true)]
     folder: Option<PathBuf>,
 
@@ -23,10 +24,11 @@ struct Cli {
     #[arg(long, short = 'p', global = true, default_value_t = 8080)]
     port: u16,
 
-    /// Pre-shared passphrase used to authenticate and key the encrypted
-    /// channel. Required for `join`. Optional for `host` — if omitted,
-    /// the host generates a fresh random one and prints it.
-    #[arg(long, global = true)]
+    /// Pre-shared passphrase. **Strongly prefer the `TELEPORT_PASSPHRASE`
+    /// environment variable** — argv is world-readable on macOS via
+    /// `ps`/Activity Monitor, env vars are not. The CLI flag exists only
+    /// for ad-hoc debugging and prints a warning when used.
+    #[arg(long, global = true, hide = true)]
     passphrase: Option<String>,
 
     #[command(subcommand)]
@@ -50,11 +52,17 @@ async fn main() -> notify::Result<()> {
 
     println!("Teleport Daemon v{}", env!("CARGO_PKG_VERSION"));
 
-    // Resolve and validate the watch folder.
-    let watch_root: PathBuf = cli
-        .folder
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().expect("failed to read current dir"));
+    // Resolve and validate the watch folder. We refuse to start without
+    // an explicit `--folder` because the previous fallback (current dir)
+    // could quietly expose the user's `$HOME` if launched from Spotlight,
+    // a shell prompt at `~`, etc.
+    let watch_root: PathBuf = match cli.folder.clone() {
+        Some(p) => p,
+        None => {
+            eprintln!("❌ --folder is required. Pass the absolute path of the directory to sync.");
+            std::process::exit(2);
+        }
+    };
 
     let watch_root = match watch_root.canonicalize() {
         Ok(p) => p,
@@ -72,7 +80,28 @@ async fn main() -> notify::Result<()> {
     println!("🔌 Using port: {}", cli.port);
 
     // Resolve passphrase.
-    let passphrase = match (&cli.command, cli.passphrase.as_deref()) {
+    //
+    // Source priority (most secure first):
+    //   1. `TELEPORT_PASSPHRASE` environment variable (preferred — env is
+    //      readable only by the same uid; argv is world-readable).
+    //   2. `--passphrase` CLI flag (logs a warning; intended for dev use).
+    //   3. For `host` only: generate a fresh random passphrase.
+    //
+    // We strip the env var from our process after reading so child
+    // processes (none today, but defence-in-depth) can't observe it.
+    const PASSPHRASE_ENV: &str = "TELEPORT_PASSPHRASE";
+    let env_passphrase = std::env::var(PASSPHRASE_ENV).ok();
+    if env_passphrase.is_some() {
+        // Safety: single-threaded section before we spawn the runtime tasks.
+        std::env::remove_var(PASSPHRASE_ENV);
+    }
+    if cli.passphrase.is_some() {
+        eprintln!("⚠️  --passphrase is visible to other processes via `ps`. \
+                   Prefer the TELEPORT_PASSPHRASE env var.");
+    }
+    let supplied = env_passphrase.or(cli.passphrase.clone());
+
+    let passphrase = match (&cli.command, supplied.as_deref()) {
         (Commands::Host, Some(p)) => match Passphrase::parse(p) {
             Some(pw) => pw,
             None => {
@@ -84,12 +113,12 @@ async fn main() -> notify::Result<()> {
         (Commands::Join { .. }, Some(p)) => match Passphrase::parse(p) {
             Some(pw) => pw,
             None => {
-                eprintln!("❌ Invalid --passphrase. Expected the code shown by the host (e.g. ABCDE-FGHIJ-KLMNO-PQRSTUV).");
+                eprintln!("❌ Invalid passphrase. Expected the code shown by the host (e.g. ABCDE-FGHIJ-KLMNO-PQRSTUV).");
                 std::process::exit(2);
             }
         },
         (Commands::Join { .. }, None) => {
-            eprintln!("❌ --passphrase is required for `join`. Ask the host for the code shown on its dashboard.");
+            eprintln!("❌ A passphrase is required for `join`. Set TELEPORT_PASSPHRASE.");
             std::process::exit(2);
         }
     };
@@ -290,9 +319,9 @@ fn make_upsert(
     let content = std::fs::read(path).ok()?;
     let path_str = path.to_string_lossy().into_owned();
 
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    let current_hash = hasher.finish();
+    // xxh3_64: ~30 GB/s on Apple Silicon vs ~2 GB/s for SipHash. Used only
+    // for echo suppression — collision resistance not required.
+    let current_hash = xxh3_64(&content);
     if let Some(cached) = hashes.get(&path_str) {
         if *cached == current_hash {
             return None; // echo of a peer-driven write

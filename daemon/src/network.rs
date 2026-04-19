@@ -15,8 +15,6 @@ use crate::crypto::{EncryptedStream, Passphrase};
 use crate::path_safe::safe_join;
 use crate::proto::{self, FileBody, FileEvent, MAX_FRAME_BYTES};
 use dashmap::DashMap;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,6 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
+use xxhash_rust::xxh3::xxh3_64;
 
 /// Identifies the producer of an event so the broadcast hub can avoid
 /// echoing events back to their originator. `0` is reserved for the local
@@ -86,8 +85,11 @@ pub async fn start_host(port: u16, hub: Arc<PeerHub>, passphrase: Passphrase) {
         }
     };
     println!("📡 Host listening on {bind_addr}");
-    println!("🔑 Passphrase: {}", passphrase.display());
-    println!("   (share this with the joining peer)");
+    // Deliberately do NOT print the passphrase here — daemon stdout is
+    // captured by the UI and persisted to ~/Library/Logs/Teleport.
+    // The UI shows the passphrase to the user separately, in-memory only.
+    println!("🔑 Passphrase active ({} chars; see UI to share).",
+             passphrase.display().len());
 
     loop {
         match listener.accept().await {
@@ -291,10 +293,8 @@ async fn send_initial_sync(
             Err(_) => continue,
         };
         // Update local caches so live FSEvents echoes get suppressed.
-        let mut hasher = DefaultHasher::new();
-        content.hash(&mut hasher);
         hub.file_hashes
-            .insert(path.to_string_lossy().into_owned(), hasher.finish());
+            .insert(path.to_string_lossy().into_owned(), xxh3_64(&content));
         if let Ok(text) = std::str::from_utf8(&content) {
             hub.file_state
                 .insert(path.to_string_lossy().into_owned(), text.to_string());
@@ -336,7 +336,20 @@ pub async fn apply_event(hub: &PeerHub, event: &FileEvent) -> std::io::Result<()
                 }
                 FileBody::Patch(diff) => {
                     println!("🧩 Upsert (patch): {path}");
-                    let local_text = tokio::fs::read_to_string(&abs).await.unwrap_or_default();
+                    // Refuse to apply a text patch to a file we can't read
+                    // as UTF-8 — falling back to an empty base would
+                    // silently truncate a binary or non-UTF-8 file.
+                    let local_text = match tokio::fs::read(&abs).await {
+                        Ok(bytes) => match String::from_utf8(bytes) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                eprintln!("⚠️  Refusing to apply text patch to non-UTF-8 file {path}; ignoring");
+                                return Ok(());
+                            }
+                        },
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                        Err(e) => return Err(e),
+                    };
                     let patch = match diffy::Patch::from_str(diff) {
                         Ok(p) => p,
                         Err(e) => {
@@ -354,9 +367,8 @@ pub async fn apply_event(hub: &PeerHub, event: &FileEvent) -> std::io::Result<()
                 }
             };
 
-            let mut hasher = DefaultHasher::new();
-            final_content.hash(&mut hasher);
-            hub.file_hashes.insert(abs_str.clone(), hasher.finish());
+            hub.file_hashes
+                .insert(abs_str.clone(), xxh3_64(&final_content));
             if let Ok(text) = std::str::from_utf8(&final_content) {
                 hub.file_state.insert(abs_str, text.to_string());
             } else {

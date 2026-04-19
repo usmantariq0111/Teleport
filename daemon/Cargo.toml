@@ -19,6 +19,8 @@ hkdf = "0.12"
 sha2 = "0.10"
 rand = "0.8"
 data-encoding = "2.5"
+# Wipes secret bytes when dropped so they don't linger in heap.
+zeroize = { version = "1.7", features = ["derive"] }
 
 # v0.4 — initial sync walk
 walkdir = "2.5"
@@ -26,6 +28,11 @@ walkdir = "2.5"
 # v0.5 — local-network discovery
 mdns-sd = "0.11"
 gethostname = "0.5"
+
+# v0.6 — perf: ~10–15× faster than std SipHash for content fingerprints.
+# Hash is internal to a single daemon version; no cross-version compat
+# concerns because both peers always run the same release.
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -25,6 +25,30 @@ enum DaemonMode: String, Codable {
     case join
 }
 
+/// Thread-safe stdout-line accumulator used by the daemon pipe handler.
+/// Reads come in on an arbitrary background thread, so we serialise all
+/// access through an internal lock and return whole lines to the caller.
+final class LineBuffer: @unchecked Sendable {
+    private var carry = Data()
+    private let lock = NSLock()
+
+    /// Feed bytes; returns any newly-completed lines (without trailing newlines).
+    func append(_ data: Data) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        carry.append(data)
+        guard let lastNL = carry.lastIndex(where: { $0 == 0x0A || $0 == 0x0D }) else { return [] }
+        let completeRange = carry.startIndex..<carry.index(after: lastNL)
+        let chunk = carry.subdata(in: completeRange)
+        carry.removeSubrange(completeRange)
+        guard let str = String(data: chunk, encoding: .utf8) else { return [] }
+        return str
+            .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+            .map(String.init)
+            .filter { !$0.isEmpty }
+    }
+}
+
 /// Owns the lifecycle of the Rust daemon subprocess and exposes
 /// observable state (logs, status, stats) to SwiftUI views.
 @MainActor
@@ -75,6 +99,13 @@ final class DaemonController: ObservableObject {
     private var outputPipe: Pipe?
     private let logQueue = DispatchQueue(label: "com.teleport.daemon.logs")
     private var uptimeTimer: Timer?
+
+    /// Lines coming off the daemon pipe accumulate here and get drained
+    /// to the main actor on a ~16 ms tick. Without this, a noisy initial
+    /// sync (1k+ files) hits the SwiftUI graph at ~1 kHz and every
+    /// view that observes `logs` re-renders on every line.
+    private var pendingLines: [String] = []
+    private var flushScheduled = false
 
     /// What we were running when sleep hit, so we can offer a one-tap
     /// resume after wake. Hosts can't auto-resume because the passphrase
@@ -132,10 +163,18 @@ final class DaemonController: ObservableObject {
         proc.executableURL = URL(fileURLWithPath: daemonPath)
         proc.currentDirectoryURL = folderURL
 
+        // SECURITY: pass the passphrase via an environment variable, never
+        // via argv. On macOS, argv is readable by any user via `ps -ef` /
+        // Activity Monitor / `sysctl kern.proc.args`, while env vars are
+        // gated to the same uid. The daemon strips the variable from its
+        // own process before forking anything.
+        var env = ProcessInfo.processInfo.environment
+        env["TELEPORT_PASSPHRASE"] = resolvedPassphrase.display
+        proc.environment = env
+
         var args: [String] = [
             "--folder", folderURL.path,
             "--port", String(port),
-            "--passphrase", resolvedPassphrase.display,
         ]
         switch mode {
         case .host:
@@ -150,17 +189,19 @@ final class DaemonController: ObservableObject {
         proc.standardOutput = pipe
         proc.standardError = pipe
 
+        // Buffer raw bytes across reads — a single `availableData` call may
+        // hand us a partial UTF-8 sequence at the boundary or split a line
+        // mid-way. Holding the tail until we see a newline prevents both
+        // garbled glyphs and "1/2 of a log line" entries.
+        // Reference type so the closure captures a stable identity (Swift 6
+        // strict-concurrency disallows mutating captured `var`s).
+        let carry = LineBuffer()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else { return }
-            let lines = str.split(whereSeparator: { $0 == "\n" || $0 == "\r" })
-            for line in lines where !line.isEmpty {
-                let lineString = String(line)
-                Task { @MainActor [weak self] in
-                    self?.append(lineString)
-                    self?.updateStats(for: lineString)
-                }
-            }
+            guard !data.isEmpty else { return }
+            let lines = carry.append(data)
+            guard !lines.isEmpty else { return }
+            self?.enqueueLines(lines)
         }
 
         proc.terminationHandler = { [weak self] _ in
@@ -181,8 +222,10 @@ final class DaemonController: ObservableObject {
             append("📁 Watching folder: \(folderURL.path)")
             switch mode {
             case .host:
-                append("🚀 Host listening on port \(port)…")
-                append("🔑 Share this passphrase with the joining peer: \(resolvedPassphrase.display)")
+                append("🚀 Host listening on port \(port). Passphrase shown in dashboard.")
+                // SECURITY: the passphrase itself is never written to logs
+                // (memory or disk). It only lives in `activePassphrase` for
+                // the UI to render and gets cleared on stop.
             case .join:
                 append("🚀 Joining peer at \(ip ?? peerIP):\(port)…")
             }
@@ -307,12 +350,67 @@ final class DaemonController: ObservableObject {
     }
 
     private func append(_ text: String) {
-        let entry = LogEntry(timestamp: Date(), line: text)
+        let safe = Self.redact(text)
+        let entry = LogEntry(timestamp: Date(), line: safe)
         logs.append(entry)
         if logs.count > maxLogs {
             logs.removeFirst(logs.count - maxLogs)
         }
-        LogPersistence.shared.append(text)
+        LogPersistence.shared.append(safe)
+    }
+
+    /// Called from the pipe-reader background thread. Buffers lines and
+    /// schedules a single coalesced flush to the main actor instead of
+    /// posting one Task per line — under heavy load (initial sync of a
+    /// large repo) the per-line `Task @MainActor` model used to peg the
+    /// dispatcher and re-render every observer for every line.
+    private nonisolated func enqueueLines(_ lines: [String]) {
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            self.pendingLines.append(contentsOf: lines)
+            self.scheduleFlush()
+        }
+    }
+
+    private func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        // ~16 ms ≈ one display frame: imperceptible UI delay, but lets
+        // bursts of 50–500 lines collapse into a single state mutation.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+            self?.flushPendingLines()
+        }
+    }
+
+    private func flushPendingLines() {
+        flushScheduled = false
+        guard !pendingLines.isEmpty else { return }
+        let batch = pendingLines
+        pendingLines.removeAll(keepingCapacity: true)
+
+        let now = Date()
+        var newEntries: [LogEntry] = []
+        newEntries.reserveCapacity(batch.count)
+        for raw in batch {
+            let safe = Self.redact(raw)
+            newEntries.append(LogEntry(timestamp: now, line: safe))
+            updateStats(for: safe)
+            LogPersistence.shared.append(safe)
+        }
+        logs.append(contentsOf: newEntries)
+        if logs.count > maxLogs {
+            logs.removeFirst(logs.count - maxLogs)
+        }
+    }
+
+    /// Defence-in-depth log scrubber. The daemon was changed to never print
+    /// the passphrase, but if a future change ever leaks it, redact it
+    /// before it can hit the on-disk log file or the clipboard.
+    private static func redact(_ line: String) -> String {
+        guard let pp = DaemonController.shared.activePassphrase else { return line }
+        let secret = pp.display
+        guard !secret.isEmpty, line.contains(secret) else { return line }
+        return line.replacingOccurrences(of: secret, with: "[REDACTED]")
     }
 
     /// Parse `(N bytes)` out of daemon log lines so the dashboard counter

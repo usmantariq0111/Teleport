@@ -34,6 +34,7 @@ use sha2::Sha256;
 use snow::{Builder, HandshakeState, TransportState};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::proto::MAX_FRAME_BYTES;
 
@@ -42,7 +43,11 @@ const HKDF_INFO: &[u8] = b"teleport.psk.v1";
 const PSK_RAW_BYTES: usize = 16;
 
 /// User-visible passphrase. Wraps the raw bytes plus a friendly display form.
-#[derive(Clone)]
+///
+/// `ZeroizeOnDrop` ensures the secret bytes are wiped from the heap as soon
+/// as the value goes out of scope, instead of waiting for the allocator to
+/// hand the page back out to some unrelated allocation.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct Passphrase {
     raw: [u8; PSK_RAW_BYTES],
 }
@@ -170,15 +175,21 @@ impl EncryptedStream {
         // must be at most 65,519. We cap conservatively at 65,000 to leave
         // headroom for any future framing tweaks.
         const NOISE_PLAINTEXT_MAX: usize = 65_000;
-        let chunks = plaintext.chunks(NOISE_PLAINTEXT_MAX);
-        let n_chunks = chunks.len().max(1) as u32;
+
+        // Compute chunk count without iterating twice (the previous version
+        // walked `plaintext.chunks()` once for `len()` and again for the
+        // encrypt loop).
+        let n_chunks = if plaintext.is_empty() {
+            1
+        } else {
+            (plaintext.len() + NOISE_PLAINTEXT_MAX - 1) / NOISE_PLAINTEXT_MAX
+        } as u32;
 
         self.cipher_buf.clear();
         self.cipher_buf.extend_from_slice(&n_chunks.to_be_bytes());
 
         let mut tmp = vec![0u8; NOISE_PLAINTEXT_MAX + 16];
         if plaintext.is_empty() {
-            // Send one empty chunk so the receiver always sees at least one.
             let len = self
                 .transport
                 .write_message(&[], &mut tmp)

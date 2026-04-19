@@ -19,7 +19,16 @@ final class LogPersistence {
     private let queue = DispatchQueue(label: "com.teleport.log.persist")
     private let logURL: URL
     private let archiveURL: URL
-    private let maxBytes: Int = 5 * 1024 * 1024  // 5 MB
+    private let maxBytes: UInt64 = 5 * 1024 * 1024  // 5 MB
+
+    /// One persistent handle for the active log. Re-opened only after a
+    /// rotation. Without this we open + seek-to-end + close per log line
+    /// (4 syscalls), which dominates write throughput during initial sync
+    /// of a large repo.
+    private var handle: FileHandle?
+    /// Tracked locally so we don't have to `stat()` after every write
+    /// to know when we've crossed the rotation threshold.
+    private var bytesWritten: UInt64 = 0
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -36,9 +45,12 @@ final class LogPersistence {
         try? fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
         self.logURL = logsDir.appendingPathComponent("teleport.log")
         self.archiveURL = logsDir.appendingPathComponent("teleport.log.1")
-        // Stamp every launch so users can find session boundaries when they
-        // open the file in Console / a text editor.
+        openHandle()
         write(line: "==== Teleport launched at \(Self.timeFormatter.string(from: Date())) ====")
+    }
+
+    deinit {
+        try? handle?.close()
     }
 
     /// Append one line. Non-blocking; ordered. Errors are swallowed because
@@ -78,30 +90,47 @@ final class LogPersistence {
         let stamped = "[\(Self.timeFormatter.string(from: Date()))] \(line)\n"
         guard let data = stamped.data(using: .utf8) else { return }
 
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: logURL.path) {
-            fm.createFile(atPath: logURL.path, contents: nil)
-        }
+        if handle == nil { openHandle() }
+        guard let h = handle else { return }
         do {
-            let handle = try FileHandle(forWritingTo: logURL)
-            defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: data)
-
-            if let attrs = try? fm.attributesOfItem(atPath: logURL.path),
-               let size = attrs[.size] as? Int,
-               size > maxBytes {
+            try h.write(contentsOf: data)
+            bytesWritten &+= UInt64(data.count)
+            if bytesWritten > maxBytes {
                 rotate()
             }
         } catch {
-            // Intentionally silent — nothing useful to do here, and we
-            // can't recurse into ourselves to log the failure.
+            // Re-open on next write — handle may be stale (e.g. file got
+            // moved out from under us by an external tool).
+            try? handle?.close()
+            handle = nil
+        }
+    }
+
+    private func openHandle() {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: logURL.path) {
+            fm.createFile(atPath: logURL.path, contents: nil)
+            bytesWritten = 0
+        } else if let attrs = try? fm.attributesOfItem(atPath: logURL.path),
+                  let size = attrs[.size] as? UInt64 {
+            bytesWritten = size
+        }
+        do {
+            let h = try FileHandle(forWritingTo: logURL)
+            try h.seekToEnd()
+            handle = h
+        } catch {
+            handle = nil
         }
     }
 
     private func rotate() {
+        try? handle?.close()
+        handle = nil
         let fm = FileManager.default
         try? fm.removeItem(at: archiveURL)
         try? fm.moveItem(at: logURL, to: archiveURL)
+        bytesWritten = 0
+        openHandle()
     }
 }

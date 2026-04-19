@@ -77,14 +77,17 @@ final class BonjourBrowser: ObservableObject {
     /// `daemon ... join <ip>`. Uses the legacy `NetService.resolve()` API
     /// because `NWConnection` doesn't expose the resolved address back to
     /// the caller.
+    ///
+    /// The delegate keeps a reference to the `NetService` so the service
+    /// (and therefore the delegate) stays alive until resolution completes
+    /// or times out — and explicitly clears it on completion to avoid the
+    /// associated-object retain leak the previous implementation had.
     func resolve(_ peer: DiscoveredPeer, completion: @escaping (Result<(host: String, port: Int), Error>) -> Void) {
         let service = NetService(domain: peer.domain, type: "_teleport._tcp.", name: peer.serviceName)
-        let resolver = NetServiceResolverDelegate(completion: completion)
+        let resolver = NetServiceResolverDelegate(service: service, completion: completion)
         service.delegate = resolver
         service.schedule(in: .main, forMode: .common)
         service.resolve(withTimeout: 5)
-        // Keep the delegate alive until it fires.
-        objc_setAssociatedObject(service, &NetServiceResolverDelegate.key, resolver, .OBJC_ASSOCIATION_RETAIN)
     }
 
     // MARK: - Private
@@ -124,45 +127,54 @@ final class BonjourBrowser: ObservableObject {
 }
 
 /// One-shot delegate that bridges `NetService.resolve` callbacks into a
-/// completion closure. Held alive via objc_associated storage on the
-/// service itself so the caller doesn't have to track it.
+/// completion closure.
+///
+/// Lifetime: the delegate retains its `NetService` and the service retains
+/// the delegate (via `service.delegate = self`). This forms a deliberate
+/// cycle that keeps the resolution alive while it's in flight; we break
+/// the cycle in `finish()` once the callback fires or the resolve is
+/// stopped. Without an explicit break the previous version leaked a
+/// closure per resolution via `objc_setAssociatedObject`.
 private final class NetServiceResolverDelegate: NSObject, NetServiceDelegate {
-    static var key: UInt8 = 0
-
+    private var service: NetService?
     private let completion: (Result<(host: String, port: Int), Error>) -> Void
     private var done = false
 
-    init(completion: @escaping (Result<(host: String, port: Int), Error>) -> Void) {
+    init(service: NetService,
+         completion: @escaping (Result<(host: String, port: Int), Error>) -> Void) {
+        self.service = service
         self.completion = completion
     }
 
     func netServiceDidResolveAddress(_ sender: NetService) {
-        guard !done else { return }
-        // Prefer an IPv4 string (most LAN setups) but fall back to the
-        // hostname `sender.hostName` if address parsing fails.
         if let ip = Self.firstIPv4Address(in: sender) {
-            done = true
-            completion(.success((host: ip, port: sender.port)))
+            finish(.success((host: ip, port: sender.port)))
             return
         }
         if let host = sender.hostName, !host.isEmpty {
-            done = true
-            // Strip a trailing "." that mDNS hostnames carry.
             let trimmed = host.hasSuffix(".") ? String(host.dropLast()) : host
-            completion(.success((host: trimmed, port: sender.port)))
+            finish(.success((host: trimmed, port: sender.port)))
             return
         }
-        done = true
-        completion(.failure(NSError(domain: "Teleport.Bonjour", code: -1,
-                                    userInfo: [NSLocalizedDescriptionKey: "Could not resolve peer address."])))
+        finish(.failure(NSError(domain: "Teleport.Bonjour", code: -1,
+                                userInfo: [NSLocalizedDescriptionKey: "Could not resolve peer address."])))
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+        let code = errorDict[NetService.errorCode] ?? 0
+        finish(.failure(NSError(domain: "Teleport.Bonjour", code: code.intValue,
+                                userInfo: [NSLocalizedDescriptionKey: "Bonjour resolution failed (code \(code))."])))
+    }
+
+    private func finish(_ result: Result<(host: String, port: Int), Error>) {
         guard !done else { return }
         done = true
-        let code = errorDict[NetService.errorCode] ?? 0
-        completion(.failure(NSError(domain: "Teleport.Bonjour", code: code.intValue,
-                                    userInfo: [NSLocalizedDescriptionKey: "Bonjour resolution failed (code \(code))."])))
+        completion(result)
+        // Break the retain cycle. After this point the delegate and the
+        // service can be deallocated.
+        service?.stop()
+        service?.delegate = nil
+        service = nil
     }
 
     private static func firstIPv4Address(in service: NetService) -> String? {
