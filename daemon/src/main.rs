@@ -52,12 +52,13 @@ async fn main() -> notify::Result<()> {
     
     let gitignore = builder.build().unwrap().clone();
 
-    // The channel now passes the complex SyncMessage structure
     let (tx, rx) = mpsc::channel::<network::SyncMessage>(100);
 
-    // The Hash Cache prevents infinite echo loops
     let file_hashes = Arc::new(DashMap::<String, u64>::new());
     let watcher_hashes = file_hashes.clone();
+    
+    let file_state = Arc::new(DashMap::<String, String>::new());
+    let watcher_state = file_state.clone();
 
     let tx_clone = tx.clone();
     let root_path = path.clone();
@@ -70,8 +71,6 @@ async fn main() -> notify::Result<()> {
                         // Check .gitignore
                         if !gitignore.matched(&file_path, false).is_ignore() {
                             let path_str = file_path.to_string_lossy().into_owned();
-                            
-                            // Genuine local change. 
                             
                             // PERFORMANCE PATCH: Ignore files larger than 50 MB
                             if let Ok(metadata) = std::fs::metadata(&file_path) {
@@ -97,8 +96,27 @@ async fn main() -> notify::Result<()> {
                                     }
                                 }
                                 
-                                // The content is genuinely new. Update our cache and send it.
-                                watcher_hashes.insert(path_str, current_hash);
+                                // The content is genuinely new. Update our cache.
+                                watcher_hashes.insert(path_str.clone(), current_hash);
+                                
+                                // Diffing Logic
+                                let mut is_patch = false;
+                                let mut final_payload = content.clone();
+                                
+                                if let Ok(new_text) = String::from_utf8(content.clone()) {
+                                    if let Some(old_text) = watcher_state.get(&path_str) {
+                                        let patch = diffy::create_patch(&old_text, &new_text);
+                                        let patch_str = patch.to_string();
+                                        
+                                        // Only send patch if it's actually smaller than the file!
+                                        if patch_str.len() < new_text.len() {
+                                            is_patch = true;
+                                            final_payload = patch_str.into_bytes();
+                                        }
+                                    }
+                                    // Update state cache for next time
+                                    watcher_state.insert(path_str.clone(), new_text);
+                                }
                                 
                                 // Convert to relative path for the remote peer
                                 if let Ok(rel_path) = file_path.strip_prefix(&root_path) {
@@ -107,7 +125,8 @@ async fn main() -> notify::Result<()> {
                                     // Send over network channel
                                     let msg = network::SyncMessage {
                                         path: rel_path_str,
-                                        content,
+                                        is_patch,
+                                        content: final_payload,
                                     };
                                     let _ = tx_clone.blocking_send(msg);
                                 }
@@ -124,10 +143,10 @@ async fn main() -> notify::Result<()> {
 
     match &cli.command {
         Commands::Host => {
-            network::start_host(rx, file_hashes).await;
+            network::start_host(rx, file_hashes, file_state).await;
         }
         Commands::Join { ip } => {
-            network::start_client(ip, rx, file_hashes).await;
+            network::start_client(ip, rx, file_hashes, file_state).await;
         }
     }
 
