@@ -6,13 +6,10 @@ struct DashboardView: View {
     @StateObject private var bonjour = BonjourBrowser.shared
     @StateObject private var addressBook = LocalAddressBook.shared
     @State private var ipDraft: String = ""
-    @State private var now: Date = Date()
     @State private var modeDraft: DaemonMode = .host
     @State private var passphraseDraft: String = ""
     @State private var passphraseError: String?
     @State private var resolvingPeerID: String?
-
-    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ScrollView {
@@ -49,7 +46,6 @@ struct DashboardView: View {
             ipDraft = daemon.peerIP
             updateBrowserState()
         }
-        .onReceive(ticker) { now = $0 }
         .onChange(of: modeDraft) { _, _ in updateBrowserState() }
         .onChange(of: daemon.isRunning) { _, _ in updateBrowserState() }
         .onDisappear { bonjour.stop() }

@@ -42,6 +42,13 @@ final class DaemonController: ObservableObject {
         LogEntry(timestamp: Date(), line: "Ready to synchronize.")
     ]
     @Published private(set) var startedAt: Date? = nil
+
+    /// Whole-second uptime, refreshed by an internal timer while the
+    /// daemon is running. Lives here (not in views) so every observer —
+    /// dashboard, sidebar, menu bar — re-renders in lockstep instead of
+    /// each one having to wire up its own ticker.
+    @Published private(set) var uptimeSeconds: Int = 0
+
     @Published private(set) var bytesProcessed: Int = 0
     @Published private(set) var patchCount: Int = 0
     @Published private(set) var fullFileCount: Int = 0
@@ -67,6 +74,7 @@ final class DaemonController: ObservableObject {
     private var process: Process?
     private var outputPipe: Pipe?
     private let logQueue = DispatchQueue(label: "com.teleport.daemon.logs")
+    private var uptimeTimer: Timer?
 
     /// What we were running when sleep hit, so we can offer a one-tap
     /// resume after wake. Hosts can't auto-resume because the passphrase
@@ -169,6 +177,7 @@ final class DaemonController: ObservableObject {
             self.mode = mode
             self.startedAt = Date()
             self.activePassphrase = resolvedPassphrase
+            self.startUptimeTimer()
             append("📁 Watching folder: \(folderURL.path)")
             switch mode {
             case .host:
@@ -244,8 +253,8 @@ final class DaemonController: ObservableObject {
     }
 
     var uptimeString: String {
-        guard let startedAt else { return "—" }
-        let interval = Int(Date().timeIntervalSince(startedAt))
+        guard isRunning else { return "—" }
+        let interval = uptimeSeconds
         let h = interval / 3600
         let m = (interval % 3600) / 60
         let s = interval % 60
@@ -269,7 +278,32 @@ final class DaemonController: ObservableObject {
         mode = nil
         startedAt = nil
         activePassphrase = nil
+        stopUptimeTimer()
         append("🛑 Daemon stopped.")
+    }
+
+    /// Starts a 1-second timer that publishes `uptimeSeconds`. Scheduled
+    /// on the main run loop in `.common` modes so it keeps ticking even
+    /// while the user is dragging the window or scrolling logs.
+    private func startUptimeTimer() {
+        stopUptimeTimer()
+        uptimeSeconds = 0
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self, let started = self.startedAt else { return }
+                self.uptimeSeconds = Int(Date().timeIntervalSince(started))
+            }
+        }
+        // `.common` ensures the timer fires during event-tracking modes
+        // too (window drag, menu open, scroll). `.default` alone freezes.
+        RunLoop.main.add(timer, forMode: .common)
+        uptimeTimer = timer
+    }
+
+    private func stopUptimeTimer() {
+        uptimeTimer?.invalidate()
+        uptimeTimer = nil
+        uptimeSeconds = 0
     }
 
     private func append(_ text: String) {
